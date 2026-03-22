@@ -21,6 +21,13 @@
       "src/**/*",
       "styles/**/*"
     ],
+    "extraResources": [
+      {
+        "from": "assets/data",
+        "to": "data",
+        "filter": ["**/*"]
+      }
+    ],
     "mac": {
       "category": "public.app-category.graphics-design",
       "target": [{ "target": "dmg", "arch": ["arm64", "x64"] }]

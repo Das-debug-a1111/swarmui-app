@@ -18,7 +18,13 @@ function saveConfig(cfg) {
 }
 
 let config   = loadConfig();
-let DATA_PATH = config.dataPath || null;
+
+// Bundled data path (extraResources → next to app in Resources/data)
+const BUNDLED_DATA_PATH = app.isPackaged
+  ? path.join(process.resourcesPath, 'data')
+  : path.join(__dirname, 'assets', 'data');
+
+let DATA_PATH = config.dataPath || BUNDLED_DATA_PATH;
 
 // ── In-memory cache ───────────────────────────────────────────────────────────
 let _charList   = null;
