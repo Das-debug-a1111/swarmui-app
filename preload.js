@@ -8,4 +8,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   charThumbsReady:     ()     => ipcRenderer.invoke('char:thumbsReady'),
   configGet:           ()     => ipcRenderer.invoke('config:get'),
   configPickDataFolder:()     => ipcRenderer.invoke('config:pickDataFolder'),
+  onUpdateAvailable:   (cb)  => ipcRenderer.on('update-available', (_, v) => cb(v)),
 });

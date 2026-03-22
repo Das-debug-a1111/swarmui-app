@@ -44,6 +44,16 @@ textarea { user-select: text; }
   height: 100vh;
 }
 
+/* ── Update banner ────────────────────────────────────────────────────────── */
+#update-banner {
+  grid-column: 1 / -1;
+  background: #2a5c2a; color: #9fffaf;
+  padding: 6px 16px; font-size: 13px;
+  display: flex; align-items: center; gap: 8px;
+}
+#update-banner a { color: #9fffaf; font-weight: 600; }
+#update-close { margin-left: auto; background: none; border: none; color: #9fffaf; cursor: pointer; font-size: 14px; }
+
 /* ── Top bar ──────────────────────────────────────────────────────────────── */
 #topbar {
   grid-column: 1 / -1;

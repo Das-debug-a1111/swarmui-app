@@ -1,4 +1,5 @@
 const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path    = require('path');
 const fs      = require('fs').promises;
 const fsSync  = require('fs');
@@ -127,6 +128,14 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  createWindow();
+  autoUpdater.checkForUpdates().catch(() => {});
+});
+
+autoUpdater.on('update-available', (info) => {
+  const win = BrowserWindow.getAllWindows()[0];
+  if (win) win.webContents.send('update-available', info.version);
+});
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

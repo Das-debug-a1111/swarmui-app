@@ -30,7 +30,15 @@
     },
     "linux": {
       "target": [{ "target": "AppImage", "arch": ["x64"] }]
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "Das-debug-a1111",
+      "repo": "swarmui-app"
     }
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.0"
   },
   "devDependencies": {
     "electron": "^34.0.0",

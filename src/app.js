@@ -786,6 +786,16 @@ window.addEventListener('DOMContentLoaded', () => {
 
   // Auto-connect
   connect();
+
+  // Update notifications
+  if (window.electronAPI?.onUpdateAvailable) {
+    window.electronAPI.onUpdateAvailable((version) => {
+      const banner = document.getElementById('update-banner');
+      document.getElementById('update-msg').textContent = `Nouvelle version v${version} disponible — `;
+      banner.style.display = 'flex';
+      document.getElementById('update-close').onclick = () => banner.style.display = 'none';
+    });
+  }
 });
 
 $('host-input').addEventListener('change', () => {
