@@ -2,6 +2,12 @@
 
 A native Electron frontend for [SwarmUI](https://github.com/mcmonkeyprojects/SwarmUI) with a clean dark UI.
 
+## Screenshots
+
+![Txt2Img](screenshots/Txt2Img.png)
+![Inpaint](screenshots/Inpaint.png)
+![Scheduler](screenshots/Scheduler.png)
+
 ## Features
 
 - **Txt2Img** — Generate images with sampler, scheduler, LoRA, VAE, Hires Fix, ControlNet
