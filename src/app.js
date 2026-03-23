@@ -468,18 +468,8 @@ function startGeneration() {
       App.running = false;
       $('btn-generate').textContent = 'Generate';
       $('btn-generate').classList.remove('running');
-      // Show error persistently in progress bar (red, no auto-hide)
-      $('progress-wrap').classList.remove('hidden');
-      $('progress-bar').style.width = '0%';
-      $('progress-bar').style.background = 'var(--red, #e55)';
-      $('progress-pct').textContent = '';
-      $('progress-label').textContent = '⚠ ' + err;
-      // Auto-hide after 8s
-      setTimeout(() => {
-        $('progress-wrap').classList.add('hidden');
-        $('progress-bar').style.background = '';
-        setProgress(0, '');
-      }, 8000);
+      $('progress-wrap').classList.add('hidden');
+      showErrorToast(err);
     },
   });
 }
@@ -487,6 +477,19 @@ function startGeneration() {
 function stopGeneration() {
   API.interrupt().catch(() => {});
   finishGeneration();
+}
+
+function showErrorToast(msg) {
+  let toast = $('gen-error-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'gen-error-toast';
+    document.body.appendChild(toast);
+  }
+  toast.textContent = '⚠ ' + msg;
+  toast.classList.add('visible');
+  clearTimeout(toast._timer);
+  toast._timer = setTimeout(() => toast.classList.remove('visible'), 8000);
 }
 
 function finishGeneration() {

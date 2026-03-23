@@ -54,25 +54,35 @@ const API = {
       ws.send(JSON.stringify({ session_id: this.session, ...payload }));
     };
     let gotError = false;
+    let gotDone  = false;
     ws.onmessage = e => {
       let msg;
       try { msg = JSON.parse(e.data); } catch { return; }
+      if (msg.error) {
+        gotError = true; onError?.(msg.error); ws.close(); return;
+      }
       if (msg.status !== undefined) {
-        // overall_percent is 0.0–1.0 in SwarmUI
+        const s = String(msg.status);
+        if (s.toLowerCase().startsWith('error')) {
+          gotError = true; onError?.(s); ws.close(); return;
+        }
         const pct = msg.overall_percent ?? msg.cur_overall_percent ?? 0;
-        onProgress?.(msg.status, pct);
+        onProgress?.(s, pct);
       }
       if (msg.image)  onImage?.(msg.image);
-      if (msg.error)  { gotError = true; onError?.(msg.error); ws.close(); }
       if (msg.images) {
         const imgs = Array.isArray(msg.images) ? msg.images : Object.values(msg.images);
         imgs.forEach(i => onImage?.(i));
       }
-      if (msg.done) { onDone?.(); }
+      if (msg.done) { gotDone = true; onDone?.(); }
     };
     ws.onerror = () => { gotError = true; onError?.('WebSocket error'); };
-    // SwarmUI closes the socket when done — use that as the done signal
-    ws.onclose = () => { this._ws = null; if (!gotError) onDone?.(); };
+    // Si SwarmUI ferme sans done ni error → crash serveur
+    ws.onclose = () => {
+      this._ws = null;
+      if (!gotError && !gotDone) onError?.('Generation failed — server closed unexpectedly');
+      else if (!gotError) onDone?.();
+    };
     return ws;
   },
 

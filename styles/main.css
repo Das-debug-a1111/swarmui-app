@@ -921,3 +921,28 @@ input[type=range].inp-slider {
 .sws-toast.success { border-color: var(--green); color: var(--green); }
 .sws-toast.error   { border-color: var(--red); color: var(--red); }
 .sws-toast.info    { border-color: var(--accent); color: var(--accent); }
+
+/* Generation error toast */
+#gen-error-toast {
+  position: fixed;
+  bottom: 32px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: #2a0a0a;
+  border: 2px solid #e55;
+  color: #ff8080;
+  padding: 14px 24px;
+  border-radius: 10px;
+  font-size: 15px;
+  font-weight: 600;
+  max-width: 600px;
+  text-align: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s, transform 0.25s;
+  z-index: 9999;
+}
+#gen-error-toast.visible {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
