@@ -149,8 +149,9 @@ const Scheduler = (() => {
       const steps = pm.steps || '';
       const cfg   = pm.cfgscale || '';
       const meta  = [model, steps ? `${steps}steps` : '', cfg ? `${cfg}cfg` : ''].filter(Boolean).join(' · ');
-      const thumb = p.preview_image
-        ? `<img class="sws-preset-thumb" src="${esc(p.preview_image)}" alt="">`
+      const hasThumb = p.preview_image && !p.preview_image.includes('placeholder');
+      const thumb = hasThumb
+        ? `<img class="sws-preset-thumb" src="${esc(p.preview_image)}" alt="" onerror="this.style.display='none'">`
         : `<div class="sws-preset-thumb" style="display:flex;align-items:center;justify-content:center;font-size:18px">🖼</div>`;
       return `
         <div class="sws-preset-item" onclick="Scheduler._applyPreset(${i})">
@@ -208,6 +209,7 @@ const Scheduler = (() => {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(`${API.wsOrigin}/API/GenerateText2ImageWS`);
       S.currentWS = ws;
+      let gotDone = false, gotImage = false;
 
       ws.onopen = () => {
         const payload = {
@@ -247,28 +249,37 @@ const Scheduler = (() => {
 
       ws.onmessage = evt => {
         let msg; try { msg = JSON.parse(evt.data); } catch { return; }
-        if (msg.error)        { reject(new Error(msg.error)); ws.close(); return; }
+        if (msg.error) { reject(new Error(msg.error)); ws.close(); return; }
+        if (msg.status !== undefined) {
+          const s = String(msg.status);
+          if (s.toLowerCase().startsWith('error')) { reject(new Error(s)); ws.close(); return; }
+          const pct = msg.overall_percent ?? msg.cur_overall_percent ?? 0;
+          setProgress(pct, s);
+        }
         if (msg.gen_progress) {
           const p = msg.gen_progress;
           const pct = p.overall_percent ?? p.current_percent ?? 0;
           setProgress(pct, `Image ${(p.batch_index||0)+1}/${task.count}`);
-        }
-        if (msg.status !== undefined) {
-          const pct = msg.overall_percent ?? msg.cur_overall_percent ?? 0;
-          setProgress(pct, msg.status || '');
+          if (p.preview) showLivePreview(p.preview);
         }
         if (msg.image) {
+          hideLivePreview();
           const imgObj  = typeof msg.image === 'object' ? msg.image : null;
           const rawPath = imgObj ? (imgObj.image || imgObj.url || '') : msg.image;
           const src = rawPath.startsWith('http') || rawPath.startsWith('data:')
             ? rawPath
             : `${API.origin}/${rawPath.replace(/^\//, '')}`;
-          if (src) addToGallery(src, task.name, task.group || '');
+          if (src) { gotImage = true; addToGallery(src, task.name, task.group || ''); }
         }
-        if (msg.done) ws.close();
+        if (msg.done) { gotDone = true; ws.close(); }
       };
 
-      ws.onclose = () => { S.currentWS = null; if (S.stopReq) reject(new Error('stopped')); else resolve(); };
+      ws.onclose = () => {
+        S.currentWS = null;
+        if (S.stopReq) reject(new Error('stopped'));
+        else if (!gotDone && !gotImage) reject(new Error('Generation failed — server closed unexpectedly'));
+        else resolve();
+      };
       ws.onerror = () => { S.currentWS = null; reject(new Error('WebSocket error')); };
     });
   }
@@ -309,6 +320,7 @@ const Scheduler = (() => {
       } catch(e) {
         task.status = 'error'; task.errMsg = e.message;
         toast(`"${task.name}" failed: ${e.message}`, 'error');
+        if (typeof showErrorToast === 'function') showErrorToast(`"${task.name}" failed: ${e.message}`);
       }
       save(); render();
     }
@@ -318,11 +330,20 @@ const Scheduler = (() => {
     document.getElementById('sws-qcounter').textContent = '';
 
     if (!S.stopReq) {
-      document.getElementById('sws-prog-name').textContent = `Done — ${done}/${total} tasks`;
-      document.getElementById('sws-prog-name').style.color = 'var(--green)';
-      setProgress(1, '');
-      toast(`Queue done — ${done} tasks!`, 'success');
-      notify('✅ SwarmUI Scheduler', `Queue finished — ${done} task${done>1?'s':''} completed`, 'sws-queue-done');
+      const failed = total - done;
+      if (done > 0) {
+        document.getElementById('sws-prog-name').textContent = `Done — ${done}/${total} tasks`;
+        document.getElementById('sws-prog-name').style.color = failed > 0 ? 'var(--yellow, #fa0)' : 'var(--green)';
+        setProgress(1, '');
+        toast(`Queue done — ${done}/${total} tasks succeeded`, failed > 0 ? 'info' : 'success');
+        notify('✅ SwarmUI Scheduler', `${done}/${total} task${done>1?'s':''} completed${failed>0?' ('+failed+' failed)':''}`, 'sws-queue-done');
+      } else {
+        document.getElementById('sws-prog-name').textContent = `Failed — 0/${total} tasks`;
+        document.getElementById('sws-prog-name').style.color = 'var(--red)';
+        setProgress(0, '');
+        toast(`All ${total} task${total>1?'s':''} failed`, 'error');
+        notify('❌ SwarmUI Scheduler', `Queue failed — ${total} task${total>1?'s':''} errored`, 'sws-queue-done');
+      }
     } else {
       document.getElementById('sws-prog-name').textContent = 'Stopped';
       document.getElementById('sws-prog-name').style.color = 'var(--red)';
@@ -354,6 +375,24 @@ const Scheduler = (() => {
   }
 
   // ── Gallery ─────────────────────────────────────────────────────────────────
+  function showLivePreview(dataUrl) {
+    const gallery = document.getElementById('sws-gallery');
+    if (!gallery) return;
+    let el = document.getElementById('sws-live-preview');
+    if (!el) {
+      el = document.createElement('img');
+      el.id = 'sws-live-preview';
+      el.style.cssText = 'width:100%;max-width:400px;border-radius:8px;opacity:0.8;border:2px dashed var(--accent);margin-bottom:8px;display:block;';
+      gallery.prepend(el);
+    }
+    el.src = dataUrl;
+  }
+
+  function hideLivePreview() {
+    const el = document.getElementById('sws-live-preview');
+    if (el) el.remove();
+  }
+
   function addToGallery(src, name, group) {
     const gallery = document.getElementById('sws-gallery');
     const empty = gallery.querySelector('.sws-gal-empty');
@@ -995,9 +1034,21 @@ const Scheduler = (() => {
   }
 
   // ── Public API (exposed on window.Scheduler) ─────────────────────────────────
+  function getLastPrompts() {
+    // Return prompts from the modal if open, else from first enabled task
+    const formPrompt = document.getElementById('sws-f-prompt')?.value?.trim();
+    if (formPrompt) return {
+      prompt:   formPrompt,
+      negative: document.getElementById('sws-f-neg')?.value || ''
+    };
+    const task = S.tasks.find(t => t.enabled) || S.tasks[0];
+    return task ? { prompt: task.prompt || '', negative: task.negative || '' } : null;
+  }
+
   return {
     init,
     onShow,
+    getLastPrompts,
     // Called from inline onclick handlers in rendered HTML
     _openModal:    id => openModal(id),
     _dup:          id => dupTask(id),

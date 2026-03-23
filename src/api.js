@@ -28,16 +28,16 @@ const API = {
   // ── Models ───────────────────────────────────────────────────────────────────
   async listModels(opts = {}) {
     return this.post('/API/ListModels', {
-      session_id: this.session, path: '', depth: 1,
+      session_id: this.session, path: '', depth: 5,
       sortBy: 'Name', allowRemote: false, sortReverse: false, dataImages: false,
       ...opts,
     });
   },
 
-  async listVAEs()       { return this.listModels({ subtype: 'VAE' }); },
-  async listLoRAs()      { return this.listModels({ subtype: 'LoRA' }); },
-  async listEmbeddings() { return this.listModels({ subtype: 'Embedding' }); },
-  async listControlNets(){ return this.listModels({ subtype: 'ControlNet', depth: 3 }); },
+  async listVAEs()       { return this.listModels({ subtype: 'VAE',        depth: 5 }); },
+  async listLoRAs()      { return this.listModels({ subtype: 'LoRA',        depth: 5 }); },
+  async listEmbeddings() { return this.listModels({ subtype: 'Embedding',   depth: 5 }); },
+  async listControlNets(){ return this.listModels({ subtype: 'ControlNet',  depth: 5 }); },
 
   // ── T2I params (samplers, etc.) ───────────────────────────────────────────────
   async listParams() {
@@ -45,7 +45,7 @@ const API = {
   },
 
   // ── Generate via WebSocket ────────────────────────────────────────────────────
-  generate(payload, { onProgress, onImage, onDone, onError } = {}) {
+  generate(payload, { onProgress, onPreview, onImage, onDone, onError } = {}) {
     if (this._ws) { try { this._ws.close(); } catch {} }
     const ws = new WebSocket(`${this.wsOrigin}/API/GenerateText2ImageWS`);
     this._ws = ws;
@@ -55,6 +55,7 @@ const API = {
     };
     let gotError = false;
     let gotDone  = false;
+    let gotImage = false;
     ws.onmessage = e => {
       let msg;
       try { msg = JSON.parse(e.data); } catch { return; }
@@ -69,19 +70,27 @@ const API = {
         const pct = msg.overall_percent ?? msg.cur_overall_percent ?? 0;
         onProgress?.(s, pct);
       }
-      if (msg.image)  onImage?.(msg.image);
+      if (msg.gen_progress) {
+        const gp = msg.gen_progress;
+        const pct = gp.overall_percent ?? gp.current_percent ?? 0;
+        onProgress?.(gp.status || 'Generating…', pct);
+        if (gp.preview) onPreview?.(gp.preview);
+      }
+      if (msg.image)  { gotImage = true; onImage?.(msg.image); }
       if (msg.images) {
+        gotImage = true;
         const imgs = Array.isArray(msg.images) ? msg.images : Object.values(msg.images);
         imgs.forEach(i => onImage?.(i));
       }
       if (msg.done) { gotDone = true; onDone?.(); }
     };
     ws.onerror = () => { gotError = true; onError?.('WebSocket error'); };
-    // Si SwarmUI ferme sans done ni error → crash serveur
     ws.onclose = () => {
       this._ws = null;
-      if (!gotError && !gotDone) onError?.('Generation failed — server closed unexpectedly');
-      else if (!gotError) onDone?.();
+      if (gotError) return;
+      // SwarmUI ferme le socket après msg.image sans forcément envoyer msg.done
+      if (gotDone || gotImage) onDone?.();
+      else onError?.('Generation failed — server closed unexpectedly');
     };
     return ws;
   },

@@ -34,24 +34,23 @@ const Inpaint = (() => {
     S.initialized = true;
     bindUI();
     renderPresetList();
+    // Collapsible sections
+    document.querySelectorAll('#inp-sidebar .inp-sec-hdr').forEach(hdr => {
+      hdr.addEventListener('click', e => {
+        if (e.target.closest('button')) return; // don't collapse when clicking Sync btn
+        const body = hdr.nextElementSibling;
+        if (!body || !body.classList.contains('inp-sec-body')) return;
+        hdr.classList.toggle('collapsed');
+        body.classList.toggle('hidden');
+      });
+    });
   }
 
   // Called each time the tab becomes active
   function onShow() {
     syncModels();
     syncSamplers();
-    // Auto-sync prompts from main tab if inpaint prompts are empty
-    if (!q('inp-prompt').value.trim() && !q('inp-neg').value.trim()) {
-      syncPrompts();
-    }
-  }
-
-  // Copy prompts from main Txt2Img tab → Inpaint
-  function syncPrompts() {
-    const mainPos = q('inp-positive');
-    const mainNeg = q('inp-negative');
-    if (mainPos) q('inp-prompt').value = mainPos.value;
-    if (mainNeg) q('inp-neg').value    = mainNeg.value;
+    syncSchedulers();
   }
 
   // Mirror models from main selector
@@ -76,6 +75,19 @@ const Inpaint = (() => {
     const prev = dst.value;
     dst.innerHTML = src.innerHTML;
     const saved = localStorage.getItem('swarm-inp-sampler');
+    dst.value = saved || src.value || '';
+    if (dst.value !== prev && prev) dst.value = prev;
+  }
+
+  // Mirror scheduler from main selector
+  function syncSchedulers() {
+    const src = q('sel-scheduler');
+    const dst = q('inp-scheduler');
+    if (!src || !dst) return;
+    if (src.options.length === 0) return;
+    const prev = dst.value;
+    dst.innerHTML = src.innerHTML;
+    const saved = localStorage.getItem('swarm-inp-scheduler');
     dst.value = saved || src.value || '';
     if (dst.value !== prev && prev) dst.value = prev;
   }
@@ -171,14 +183,15 @@ const Inpaint = (() => {
     q('inpp-preset-del').onclick  = deletePreset;
 
     // Sync prompts from main tab
-    q('inp-sync-prompts').onclick = syncPrompts;
 
     // Save model/sampler selection
     q('inp-sel-model').onchange = () => localStorage.setItem('swarm-inp-model',   q('inp-sel-model').value);
-    q('inp-sampler').onchange   = () => localStorage.setItem('swarm-inp-sampler', q('inp-sampler').value);
+    q('inp-sampler').onchange    = () => localStorage.setItem('swarm-inp-sampler',    q('inp-sampler').value);
+    q('inp-scheduler').onchange  = () => localStorage.setItem('swarm-inp-scheduler', q('inp-scheduler').value);
 
     // Generate
     q('inp-gen-btn').onclick = generate;
+    q('inp-clear-history').onclick = () => { q('inp-results').innerHTML = ''; };
 
     // Context menu (results)
     const ctxMenu = q('inp-ctx-menu');
@@ -526,7 +539,8 @@ const Inpaint = (() => {
       mmode:   getRadio('inp-mmode'),
       area:    getRadio('inp-area'),
       pad:     q('inp-pad').value,
-      sampler: q('inp-sampler').value,
+      sampler:    q('inp-sampler').value,
+      scheduler:  q('inp-scheduler').value,
       steps:    q('inpp-steps').value,
       cfg:      q('inpp-cfg').value,
       soft:     q('inpp-soft').checked,
@@ -552,7 +566,8 @@ const Inpaint = (() => {
     if (p.soft !== undefined) q('inpp-soft').checked = p.soft;
     if (p.mmode)   { const el = document.querySelector(`input[name="inp-mmode"][value="${p.mmode}"]`);   if (el) el.checked = true; }
     if (p.area)    { const el = document.querySelector(`input[name="inp-area"][value="${p.area}"]`);     if (el) el.checked = true; }
-    if (p.sampler) q('inp-sampler').value = p.sampler;
+    if (p.sampler)    q('inp-sampler').value    = p.sampler;
+    if (p.scheduler)  q('inp-scheduler').value  = p.scheduler;
     if (p.w)       q('inp-w').value = p.w;
     if (p.h)       q('inp-h').value = p.h;
   }
@@ -606,7 +621,14 @@ const Inpaint = (() => {
     const btn = q('inp-gen-btn');
     btn.textContent   = 'Stop';
     btn.style.background = 'var(--red)';
-    q('inp-results').innerHTML = '';
+    // Add separator between generations (history)
+    const results = q('inp-results');
+    if (results.children.length > 0) {
+      const sep = document.createElement('div');
+      sep.className = 'inp-hist-sep';
+      sep.textContent = new Date().toLocaleTimeString();
+      results.prepend(sep);
+    }
     setProgress(0);
     setStatus('Connecting…');
 
@@ -629,7 +651,8 @@ const Inpaint = (() => {
         seed:                     -1,
         width:                    +q('inp-w').value,
         height:                   +q('inp-h').value,
-        sampler:                  q('inp-sampler').value,
+        sampler:                  q('inp-sampler').value   || undefined,
+        scheduler:                q('inp-scheduler').value || undefined,
         initimagecreativity:      +q('inp-denoise').value,
         maskblur:                 +q('inp-mblur').value,
         initimagerecompositemask: getRadio('inp-mmode') !== 'not_masked',
@@ -680,28 +703,49 @@ const Inpaint = (() => {
       await new Promise((resolve, reject) => {
         const ws = new WebSocket(`ws://${API.host}/API/GenerateText2ImageWS`);
         ws.onopen    = () => ws.send(JSON.stringify(payload));
+        let gotDone = false, gotImage = false;
         ws.onmessage = async e => {
           const msg = JSON.parse(e.data);
           if (msg.error) { reject(new Error(msg.error)); ws.close(); return; }
-          if (typeof msg.gen_progress === 'number') {
-            setProgress(8 + msg.gen_progress * 88);
-            setStatus(`Generating… ${Math.round(msg.gen_progress * 100)}%`);
+          if (msg.gen_progress) {
+            const gp = msg.gen_progress;
+            const pct = gp.overall_percent ?? gp.current_percent ?? 0;
+            setProgress(8 + pct * 88);
+            setStatus(`Generating… ${Math.round(pct * 100)}%`);
+            if (gp.preview) showLivePreview(gp.preview);
           }
-          if (msg.image) await showResult(msg.image);
-          if (msg.done === true) { setProgress(100); setStatus('✅ Done'); ws.close(); resolve(); }
+          if (msg.image) { gotImage = true; hideLivePreview(); await showResult(msg.image); }
+          if (msg.done === true) { gotDone = true; setProgress(100); setStatus('✅ Done'); ws.close(); resolve(); }
         };
         ws.onerror = () => reject(new Error('WebSocket error'));
-        ws.onclose = () => resolve();
+        ws.onclose = () => { if (!gotDone && !gotImage) reject(new Error('Generation failed — server closed unexpectedly')); else resolve(); };
       });
 
     } catch (err) {
       setStatus(`❌ ${err.message}`);
       console.error('[Inpaint]', err);
+      if (typeof showErrorToast === 'function') showErrorToast(err.message);
     }
 
     S.running = false;
     btn.textContent   = 'Generate';
     btn.style.background = '';
+  }
+
+  function showLivePreview(dataUrl) {
+    let el = q('inp-live-preview');
+    if (!el) {
+      el = document.createElement('img');
+      el.id = 'inp-live-preview';
+      el.style.cssText = 'width:100%;border-radius:8px;opacity:0.8;border:2px dashed var(--accent);margin-bottom:8px;display:block;';
+      q('inp-results').prepend(el);
+    }
+    el.src = dataUrl;
+  }
+
+  function hideLivePreview() {
+    const el = q('inp-live-preview');
+    if (el) el.remove();
   }
 
   async function showResult(imgData) {

@@ -408,133 +408,139 @@
 
       <!-- Inpainting -->
       <div class="inp-sec">
-        <div class="inp-sec-hdr">Inpainting</div>
-
-        <div class="inp-field-row">
-          <div class="inp-lrow">
-            <span>Denoising strength</span>
-            <span class="inp-val" id="inp-denoise-val">0.75</span>
+        <div class="inp-sec-hdr">Inpainting <span class="arrow">▼</span></div>
+        <div class="inp-sec-body">
+          <div class="inp-field-row">
+            <div class="inp-lrow">
+              <span>Denoising strength</span>
+              <span class="inp-val" id="inp-denoise-val">0.75</span>
+            </div>
+            <input type="range" class="inp-slider" id="inp-denoise" min="0" max="1" step="0.01" value="0.75">
           </div>
-          <input type="range" class="inp-slider" id="inp-denoise" min="0" max="1" step="0.01" value="0.75">
-        </div>
 
-        <div class="inp-field-row">
-          <div class="inp-lrow">
-            <span>Mask blur</span>
-            <span class="inp-val" id="inp-mblur-val">4</span>
+          <div class="inp-field-row">
+            <div class="inp-lrow">
+              <span>Mask blur</span>
+              <span class="inp-val" id="inp-mblur-val">4</span>
+            </div>
+            <input type="range" class="inp-slider" id="inp-mblur" min="0" max="64" step="1" value="4">
           </div>
-          <input type="range" class="inp-slider" id="inp-mblur" min="0" max="64" step="1" value="4">
-        </div>
 
-        <div class="inp-field-row">
-          <span class="inp-label">Mask mode</span>
-          <div class="inp-radios">
-            <input type="radio" name="inp-mmode" id="inp-mm-masked" value="masked" checked>
-            <label for="inp-mm-masked">Inpaint masked</label>
-            <input type="radio" name="inp-mmode" id="inp-mm-not" value="not_masked">
-            <label for="inp-mm-not">Inpaint not masked</label>
+          <div class="inp-field-row">
+            <span class="inp-label">Mask mode</span>
+            <div class="inp-radios">
+              <input type="radio" name="inp-mmode" id="inp-mm-masked" value="masked" checked>
+              <label for="inp-mm-masked">Inpaint masked</label>
+              <input type="radio" name="inp-mmode" id="inp-mm-not" value="not_masked">
+              <label for="inp-mm-not">Inpaint not masked</label>
+            </div>
           </div>
         </div>
       </div>
 
       <!-- Zone -->
       <div class="inp-sec">
-        <div class="inp-sec-hdr">Zone</div>
-
-        <div class="inp-field-row">
-          <span class="inp-label">Inpaint area</span>
-          <div class="inp-radios">
-            <input type="radio" name="inp-area" id="inp-area-whole" value="whole">
-            <label for="inp-area-whole">Whole picture</label>
-            <input type="radio" name="inp-area" id="inp-area-masked" value="only_masked" checked>
-            <label for="inp-area-masked">Only masked</label>
+        <div class="inp-sec-hdr">Zone <span class="arrow">▼</span></div>
+        <div class="inp-sec-body">
+          <div class="inp-field-row">
+            <span class="inp-label">Inpaint area</span>
+            <div class="inp-radios">
+              <input type="radio" name="inp-area" id="inp-area-whole" value="whole">
+              <label for="inp-area-whole">Whole picture</label>
+              <input type="radio" name="inp-area" id="inp-area-masked" value="only_masked" checked>
+              <label for="inp-area-masked">Only masked</label>
+            </div>
           </div>
-        </div>
 
-        <div class="inp-field-row">
-          <div class="inp-lrow">
-            <span>Padding px</span>
-            <span class="inp-val" id="inp-pad-val">32</span>
+          <div class="inp-field-row">
+            <div class="inp-lrow">
+              <span>Padding px</span>
+              <span class="inp-val" id="inp-pad-val">32</span>
+            </div>
+            <input type="range" class="inp-slider" id="inp-pad" min="0" max="256" step="4" value="32">
           </div>
-          <input type="range" class="inp-slider" id="inp-pad" min="0" max="256" step="4" value="32">
-        </div>
 
-        <!-- Soft inpainting toggle (= Differential Diffusion in SwarmUI) -->
-        <div class="inp-field-row" style="margin-bottom:0">
-          <label class="inpp-toggle-row">
-            <input type="checkbox" id="inpp-soft">
-            <div class="inpp-track"><div class="inpp-thumb"></div></div>
-            <span class="inp-label" style="margin:0">Differential diffusion</span>
-          </label>
+          <div class="inp-field-row" style="margin-bottom:0">
+            <label class="inpp-toggle-row">
+              <input type="checkbox" id="inpp-soft">
+              <div class="inpp-track"><div class="inpp-thumb"></div></div>
+              <span class="inp-label" style="margin:0">Differential diffusion</span>
+            </label>
+          </div>
         </div>
       </div>
 
       <!-- Sampling -->
       <div class="inp-sec">
-        <div class="inp-sec-hdr">Sampling</div>
-
-        <div class="inp-field-row">
-          <span class="inp-label">Sampler</span>
-          <select class="inp-sel" id="inp-sampler"></select>
-        </div>
-
-        <div class="inp-field-row">
-          <span class="inp-label">Scheduler</span>
-          <select class="inp-sel" id="inp-scheduler"></select>
-        </div>
-
-        <div class="inp-field-row">
-          <div class="inp-lrow">
-            <span>Steps</span>
-            <span class="inp-val" id="inpp-steps-val">20</span>
+        <div class="inp-sec-hdr">Sampling <span class="arrow">▼</span></div>
+        <div class="inp-sec-body">
+          <div class="inp-field-row">
+            <span class="inp-label">Sampler</span>
+            <select class="inp-sel" id="inp-sampler"></select>
           </div>
-          <input type="range" class="inp-slider" id="inpp-steps" min="1" max="150" step="1" value="20">
-        </div>
 
-        <div class="inp-field-row">
-          <div class="inp-lrow">
-            <span>CFG Scale</span>
-            <span class="inp-val" id="inpp-cfg-val">6.0</span>
+          <div class="inp-field-row">
+            <span class="inp-label">Scheduler</span>
+            <select class="inp-sel" id="inp-scheduler"></select>
           </div>
-          <input type="range" class="inp-slider" id="inpp-cfg" min="1" max="30" step="0.5" value="6">
+
+          <div class="inp-field-row">
+            <div class="inp-lrow">
+              <span>Steps</span>
+              <span class="inp-val" id="inpp-steps-val">20</span>
+            </div>
+            <input type="range" class="inp-slider" id="inpp-steps" min="1" max="150" step="1" value="20">
+          </div>
+
+          <div class="inp-field-row">
+            <div class="inp-lrow">
+              <span>CFG Scale</span>
+              <span class="inp-val" id="inpp-cfg-val">6.0</span>
+            </div>
+            <input type="range" class="inp-slider" id="inpp-cfg" min="1" max="30" step="0.5" value="6">
+          </div>
         </div>
       </div>
 
       <!-- Output size -->
       <div class="inp-sec">
-        <div class="inp-sec-hdr">Output size</div>
-        <div style="display:flex;gap:8px;align-items:center">
-          <input type="number" class="inp-field" id="inp-w" value="1024" min="64" max="4096" step="64" style="flex:1;text-align:center">
-          <span style="color:var(--muted)">×</span>
-          <input type="number" class="inp-field" id="inp-h" value="1024" min="64" max="4096" step="64" style="flex:1;text-align:center">
-        </div>
-        <div class="inp-ratio-grid">
-          <button class="inp-rbtn" id="inp-auto-ratio">🎯 Auto</button>
-          <button class="inp-rbtn" data-w="1152" data-h="768">3:2</button>
-          <button class="inp-rbtn" data-w="768"  data-h="1152">2:3</button>
-          <button class="inp-rbtn" data-w="1344" data-h="768">16:9</button>
-          <button class="inp-rbtn" data-w="768"  data-h="1344">9:16</button>
-          <button class="inp-rbtn" data-w="1024" data-h="1024">1:1</button>
+        <div class="inp-sec-hdr">Output size <span class="arrow">▼</span></div>
+        <div class="inp-sec-body">
+          <div style="display:flex;gap:8px;align-items:center">
+            <input type="number" class="inp-field" id="inp-w" value="1024" min="64" max="4096" step="64" style="flex:1;text-align:center">
+            <span style="color:var(--muted)">×</span>
+            <input type="number" class="inp-field" id="inp-h" value="1024" min="64" max="4096" step="64" style="flex:1;text-align:center">
+          </div>
+          <div class="inp-ratio-grid">
+            <button class="inp-rbtn" id="inp-auto-ratio">🎯 Auto</button>
+            <button class="inp-rbtn" data-w="1152" data-h="768">3:2</button>
+            <button class="inp-rbtn" data-w="768"  data-h="1152">2:3</button>
+            <button class="inp-rbtn" data-w="1344" data-h="768">16:9</button>
+            <button class="inp-rbtn" data-w="768"  data-h="1344">9:16</button>
+            <button class="inp-rbtn" data-w="1024" data-h="1024">1:1</button>
+          </div>
         </div>
       </div>
 
       <!-- Prompts -->
       <div class="inp-sec">
-        <div class="inp-sec-hdr" style="display:flex;align-items:center;justify-content:space-between">
-          Prompts
-          <button class="inp-btn-sm" id="inp-sync-prompts" title="Copy prompts from Txt2Img tab">↙ Sync</button>
+        <div class="inp-sec-hdr">Prompts <span class="arrow">▼</span></div>
+        <div class="inp-sec-body">
+          <label style="font-size:10px;color:var(--muted);margin-bottom:2px;display:block">Positive</label>
+          <textarea class="inp-ta" id="inp-prompt" rows="4" placeholder="Positive prompt…"></textarea>
+          <label style="font-size:10px;color:var(--muted);margin:6px 0 2px;display:block">Negative</label>
+          <textarea class="inp-ta" id="inp-neg"    rows="2" placeholder="Negative…"></textarea>
         </div>
-        <label style="font-size:10px;color:var(--muted);margin-bottom:2px;display:block">Positive</label>
-        <textarea class="inp-ta" id="inp-prompt" rows="4" placeholder="Positive prompt…"></textarea>
-        <label style="font-size:10px;color:var(--muted);margin:6px 0 2px;display:block">Negative</label>
-        <textarea class="inp-ta" id="inp-neg"    rows="2" placeholder="Negative…"></textarea>
       </div>
 
       <!-- Generate -->
       <div class="inp-sec">
         <div id="inp-pbar-wrap"><div id="inp-pbar"></div></div>
         <div id="inp-status"></div>
-        <button id="inp-gen-btn">▶ Generate</button>
+        <div style="display:flex;gap:6px">
+          <button id="inp-gen-btn" style="flex:1">▶ Generate</button>
+          <button id="inp-clear-history" class="inp-btn-sm inp-btn-danger" title="Clear history">🗑</button>
+        </div>
         <div id="inp-results"></div>
       </div>
 

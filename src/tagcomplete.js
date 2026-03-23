@@ -301,12 +301,157 @@ const TagComplete = (() => {
     return { tag: text.slice(start, pos), start, end: pos };
   }
 
+  // ── SwarmUI <tag> syntax autocomplete ─────────────────────────────────────
+  const SWARM_TAGS = [
+    // Randomization
+    { name: 'random',           desc: 'Select one random option from a list',                         insert: '<random:',         hint: 'Comma-separated: <random:cat,dog,elephant>\nUse || instead of , to include commas\nNumeric range: <random:0.8-1.2>' },
+    { name: 'random[2-4]',      desc: 'Select N random options from a list',                          insert: '<random[2-4]:',    hint: 'Comma-separated: <random[2-4]:cat,dog,elephant>\nN can be a range: [1-3]' },
+    { name: 'alternate',        desc: 'Alternate between options each step (blend concepts)',          insert: '<alternate:',      hint: 'Pipe-separated: <alternate:cat|dog|elephant>\nAlias: <alt:...>' },
+    { name: 'fromto[0.5]',      desc: 'Switch prompt from one value to another at a timestep',        insert: '<fromto[0.5]:',    hint: '<fromto[0.5]:before,after>\n0.5 = halfway through steps (decimal) or use integer step index' },
+    { name: 'wildcard',         desc: 'Pick a random line from a wildcard .txt file',                 insert: '<wildcard:',       hint: '<wildcard:filename> — file in Data/Wildcards/\nCount: <wildcard[2]:name>\nExclude: <wildcard:name,not=word1,word2>\nAlias: <wc:...>' },
+    { name: 'wildcard[2]',      desc: 'Pick N random lines from a wildcard file',                     insert: '<wildcard[2]:',    hint: '<wildcard[2]:filename> — picks 2 random lines' },
+    { name: 'repeat[3]',        desc: 'Repeat text N times',                                          insert: '<repeat[3]:',      hint: '<repeat[3]:word> — N can be a range: [1-3]' },
+    // Model / Asset
+    { name: 'lora',             desc: 'Apply a LoRA model (with optional weight)',                    insert: '<lora:',           hint: null, modelType: 'lora' },
+    { name: 'embed',            desc: 'Use a CLIP textual inversion embedding',                       insert: '<embed:',          hint: null, modelType: 'embed' },
+    { name: 'embedding',        desc: 'Use a CLIP textual inversion embedding (alias)',                insert: '<embedding:',      hint: null, modelType: 'embed' },
+    { name: 'preset',           desc: 'Apply a saved preset configuration',                           insert: '<preset:',         hint: null, modelType: 'preset' },
+    { name: 'param[name]',      desc: 'Set any generation parameter directly',                        insert: '<param[',          hint: '<param[steps]:30> or <param[cfgscale]:7>\nSupports nested tags: <param[cfgscale]:<random:5,7,9>>' },
+    { name: 'trigger',          desc: 'Insert trigger phrases from current model and LoRAs',           insert: '<trigger>',        hint: 'No arguments needed — inserts trigger words automatically' },
+    // Variables / Macros
+    { name: 'setvar[name]',     desc: 'Store a variable for reuse',                                   insert: '<setvar[',         hint: '<setvar[myvar]:value> — retrieve with <var:myvar>\nAdd ,false to store silently: <setvar[name,false]:value>' },
+    { name: 'var',              desc: 'Retrieve a stored variable',                                   insert: '<var:',            hint: '<var:myvar> — returns value stored with <setvar[myvar]:...>' },
+    { name: 'setmacro[name]',   desc: 'Store a macro (re-evaluated each use)',                        insert: '<setmacro[',       hint: '<setmacro[mymacro]:definition> — call with <macro:mymacro>' },
+    { name: 'macro',            desc: 'Expand a stored macro',                                        insert: '<macro:',          hint: '<macro:mymacro> — expands macro stored with <setmacro[...]>' },
+    // Section routing
+    { name: 'base',             desc: 'Route following prompt to base model only',                    insert: '<base>',           hint: 'No arguments — content after tag goes to base model only (not refiner)' },
+    { name: 'refiner',          desc: 'Route following prompt to refiner/upscale model only',         insert: '<refiner>',        hint: 'No arguments — content after tag goes to refiner stage only' },
+    { name: 'video',            desc: 'Route following prompt to video generation stage',             insert: '<video>',          hint: 'No arguments — content after tag goes to video stage' },
+    { name: 'break',            desc: 'Manual CLIP token split for long prompts',                     insert: '<break>',          hint: 'No arguments — splits prompt at CLIP 75-token boundary' },
+    // Spatial / Regional
+    { name: 'region',           desc: 'Apply alternate prompt to a rectangular region',               insert: '<region:',         hint: 'x,y,width,height (0.0–1.0): <region:0.25,0.25,0.5,0.5>\nWith strength: <region:0,0,0.5,1,0.8>\n"background" for background region\n"end" to return to global prompt' },
+    { name: 'object',           desc: 'Regional prompt + automatic inpainting of the area',           insert: '<object:',         hint: 'x,y,width,height (0.0–1.0): <object:0.25,0.25,0.5,0.5>\nWith strength: <object:0,0,0.5,1,0.8>' },
+    { name: 'segment',          desc: 'Segmentation mask-based regional prompt',                      insert: '<segment:',        hint: '<segment:face|hair> or YOLO: <segment:yolo-modelname-0,creativity,threshold>\nMultiple: <segment:face|hair>' },
+    { name: 'clear',            desc: 'Clear/make transparent the matched region (PNG only)',         insert: '<clear:',          hint: 'Same format as <segment:...>\n<clear:face> — makes the face area transparent' },
+    // Utility
+    { name: 'comment',          desc: 'Add a comment (entirely ignored during generation)',           insert: '<comment:',        hint: '<comment:my note here> — completely discarded, use for documentation' },
+  ];
+
+  // Cache for LoRA/Embedding lists (cleared on reconnect via TagComplete.clearModelCache)
+  const _modelCache = {};
+  async function fetchModelList(type) {
+    if (_modelCache[type]) return _modelCache[type];
+    try {
+      if (type === 'preset') {
+        const raw = localStorage.getItem('swarmapp-presets');
+        const presets = raw ? JSON.parse(raw) : {};
+        const names = Object.keys(presets);
+        _modelCache[type] = names;
+        return names;
+      }
+      const fn = type === 'lora' ? 'listLoRAs' : 'listEmbeddings';
+      const res = await API[fn]();
+      const files = res?.files || res?.models || [];
+      const names = files.map(f => typeof f === 'string' ? f : (f.name || f.title || '')).filter(Boolean);
+      _modelCache[type] = names;
+      return names;
+    } catch { return []; }
+  }
+
+  function getSwarmPrefix(el) {
+    const text   = el.value;
+    const pos    = el.selectionStart;
+    const before = text.slice(0, pos);
+    const lastLt = before.lastIndexOf('<');
+    if (lastLt === -1) return null;
+    const afterLt = before.slice(lastLt + 1);
+    if (afterLt.includes('>')) return null;
+    // Check if we're after the colon of a known tag (e.g. <lora:xxx, <random:xxx)
+    const colonIdx = afterLt.indexOf(':');
+    if (colonIdx !== -1) {
+      const tagPart = afterLt.slice(0, colonIdx).toLowerCase().replace(/\[.*?\]/, '');
+      const query   = afterLt.slice(colonIdx + 1);
+      const tagDef  = SWARM_TAGS.find(t => t.name.toLowerCase().replace(/\[.*?\]/, '') === tagPart);
+      if (tagDef) return { ltPos: lastLt, afterColon: true, tagDef, modelQuery: query };
+    }
+    return { prefix: afterLt.toLowerCase(), ltPos: lastLt, afterColon: false };
+  }
+
+  function renderSwarmDropdown(prefix, el) {
+    const matches = SWARM_TAGS.filter(t => t.name.toLowerCase().startsWith(prefix));
+    if (!matches.length) { hideDD(); return; }
+    dropdown.innerHTML = matches.map((t, i) => `
+      <div class="tc-row" data-si="${i}" style="padding:6px 10px;cursor:pointer;display:flex;gap:8px;align-items:baseline">
+        <span style="color:#a78bfa;font-weight:600;white-space:nowrap">${esc(t.name)}</span>
+        <span style="color:#6b7280;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(t.desc)}</span>
+      </div>`).join('');
+    dropdown.querySelectorAll('.tc-row').forEach((row, i) => {
+      row.addEventListener('mousedown', e => { e.preventDefault(); insertSwarmTag(matches[i], el); });
+    });
+    positionDD(el);
+    dropdown.style.display = 'block';
+  }
+
+  function insertSwarmTag(tag, el) {
+    const { ltPos } = getSwarmPrefix(el);
+    const text = el.value;
+    const pos  = el.selectionStart;
+    el.value = text.slice(0, ltPos) + tag.insert + text.slice(pos);
+    const cur = ltPos + tag.insert.length;
+    el.setSelectionRange(cur, cur);
+    hideDD();
+    el.dispatchEvent(new Event('input'));
+  }
+
   // ── Input handler ──────────────────────────────────────────────────────────
   let _debT;
   function onInput(e) {
     clearTimeout(_debT);
     _debT = setTimeout(() => {
       const el = e.target;
+      // Check for SwarmUI <tag> syntax first
+      const swarm = getSwarmPrefix(el);
+      if (swarm !== null) {
+        currentEl = el;
+        if (swarm.afterColon) {
+          const { tagDef, modelQuery } = swarm;
+          if (tagDef.modelType) {
+            // Show model list (lora/embed)
+            fetchModelList(tagDef.modelType).then(names => {
+              const q = modelQuery.toLowerCase();
+              const matches = names.filter(n => n.toLowerCase().includes(q)).slice(0, 20);
+              if (!matches.length) { hideDD(); return; }
+              dropdown.innerHTML = matches.map((n, i) => `
+                <div class="tc-row" data-mi="${i}" style="padding:6px 10px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+                  <span style="color:#a78bfa;font-weight:600">${esc(n)}</span>
+                </div>`).join('');
+              dropdown.querySelectorAll('.tc-row').forEach((row, i) => {
+                row.addEventListener('mousedown', e => {
+                  e.preventDefault();
+                  const text = el.value, pos = el.selectionStart;
+                  const colonPos = text.lastIndexOf(':', pos);
+                  el.value = text.slice(0, colonPos + 1) + matches[i] + '>' + text.slice(pos);
+                  const cur = colonPos + 1 + matches[i].length + 1;
+                  el.setSelectionRange(cur, cur);
+                  hideDD();
+                });
+              });
+              positionDD(el);
+              dropdown.style.display = 'block';
+            });
+          } else if (tagDef.hint) {
+            // Show syntax hint
+            dropdown.innerHTML = `<div style="padding:8px 12px;color:#9ca3af;font-size:12px;line-height:1.6;white-space:pre-line">${esc(tagDef.hint)}</div>`;
+            positionDD(el);
+            dropdown.style.display = 'block';
+          } else {
+            hideDD();
+          }
+          return;
+        }
+        renderSwarmDropdown(swarm.prefix, el);
+        return;
+      }
       const { tag, start, end } = getCurrentTag(el);
       currentEl = el; tagStart = start; tagEnd = end;
       if (tag.length >= CFG.minChars) {
@@ -403,8 +548,8 @@ const TagComplete = (() => {
     loadRecent();
     buildDB();
 
-    // Attach to our specific textareas
-    ['inp-positive', 'inp-negative'].forEach(id => {
+    // Attach to all prompt textareas (Txt2Img, Inpaint, Scheduler)
+    ['inp-positive', 'inp-negative', 'inp-prompt', 'inp-neg', 'sws-f-prompt', 'sws-f-neg'].forEach(id => {
       const el = document.getElementById(id);
       if (el) attach(el);
     });
@@ -420,5 +565,5 @@ const TagComplete = (() => {
     return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
-  return { init, mergeExtra, parseCSV };
+  return { init, mergeExtra, parseCSV, clearModelCache: () => { delete _modelCache.lora; delete _modelCache.embed; delete _modelCache.preset; } };
 })();

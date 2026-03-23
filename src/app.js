@@ -47,6 +47,7 @@ async function connect() {
 
 // ── Load all resources ────────────────────────────────────────────────────────
 async function loadAll() {
+  TagComplete.clearModelCache();
   await Promise.all([
     loadModels(),
     loadVAEs(),
@@ -109,7 +110,7 @@ async function loadVAEs() {
 async function loadLoRAs() {
   try {
     const d = await API.listLoRAs();
-    App.loraModels = d.files || [];
+    App.loraModels = d.files || d.models || [];
     // refresh all lora selects
     document.querySelectorAll('.lora-sel').forEach(sel => populateLoRASelect(sel));
   } catch (e) { console.warn('loadLoRAs:', e); }
@@ -442,7 +443,21 @@ function startGeneration() {
       if (displayPct !== null) setProgress(displayPct, label);
       else $('progress-label').textContent = label;
     },
+    onPreview(dataUrl) {
+      let el = $('gen-live-preview');
+      if (!el) {
+        el = document.createElement('img');
+        el.id = 'gen-live-preview';
+        $('gallery').prepend(el);
+      }
+      el.src = dataUrl;
+      el.style.display = 'block';
+      $('gallery-empty').style.display = 'none';
+    },
     onImage(imgData) {
+      // Hide live preview when final image arrives
+      const prev = $('gen-live-preview');
+      if (prev) prev.style.display = 'none';
       // SwarmUI sends a relative path like "Output/image.png", a full URL, or base64
       let src;
       if (typeof imgData === 'string' && imgData.startsWith('data:')) {
@@ -497,6 +512,8 @@ function finishGeneration() {
   App.running = false;
   $('btn-generate').textContent = 'Generate';
   $('btn-generate').classList.remove('running');
+  const prev = $('gen-live-preview');
+  if (prev) prev.style.display = 'none';
   setTimeout(() => {
     $('progress-wrap').classList.add('hidden');
     setProgress(0, '');
@@ -732,6 +749,7 @@ function doSavePreset() {
   presets[title] = collectParamMap();
   savePresetsData(presets);
   loadPresets();
+  TagComplete.clearModelCache();
   $('sel-preset').value      = title;
   $('inp-preset-name').value = '';
 }
