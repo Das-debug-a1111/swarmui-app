@@ -268,7 +268,7 @@ const Scheduler = (() => {
         if (msg.done) ws.close();
       };
 
-      ws.onclose = () => { S.currentWS = null; resolve(); };
+      ws.onclose = () => { S.currentWS = null; if (S.stopReq) reject(new Error('stopped')); else resolve(); };
       ws.onerror = () => { S.currentWS = null; reject(new Error('WebSocket error')); };
     });
   }
