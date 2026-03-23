@@ -14,11 +14,11 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            args: --mac
+            args: --mac --arm64
           - os: windows-latest
-            args: --win
+            args: --win --x64
           - os: ubuntu-latest
-            args: --linux
+            args: --linux --x64
 
     runs-on: ${{ matrix.os }}
 
@@ -37,6 +37,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: List dist
+        run: ls dist/
+        shell: bash
+
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
@@ -44,5 +48,6 @@ jobs:
             dist/*.dmg
             dist/*.exe
             dist/*.AppImage
+          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
