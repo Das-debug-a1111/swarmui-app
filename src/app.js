@@ -389,7 +389,7 @@ function startGeneration() {
     height:         parseInt($('inp-height').value) || 1024,
     steps:          parseInt($('inp-steps').value)  || 20,
     cfgscale:       parseFloat($('inp-cfg').value)  || 7,
-    samplername:    $('sel-sampler').value   || undefined,
+    sampler:        $('sel-sampler').value   || undefined,
     scheduler:      $('sel-scheduler').value || undefined,
     seed,
   };
@@ -465,8 +465,21 @@ function startGeneration() {
     },
     onError(err) {
       console.error('Generation error:', err);
-      setProgress(0, 'Error: ' + err);
-      finishGeneration();
+      App.running = false;
+      $('btn-generate').textContent = 'Generate';
+      $('btn-generate').classList.remove('running');
+      // Show error persistently in progress bar (red, no auto-hide)
+      $('progress-wrap').classList.remove('hidden');
+      $('progress-bar').style.width = '0%';
+      $('progress-bar').style.background = 'var(--red, #e55)';
+      $('progress-pct').textContent = '';
+      $('progress-label').textContent = '⚠ ' + err;
+      // Auto-hide after 8s
+      setTimeout(() => {
+        $('progress-wrap').classList.add('hidden');
+        $('progress-bar').style.background = '';
+        setProgress(0, '');
+      }, 8000);
     },
   });
 }
@@ -611,7 +624,8 @@ function applyPreset(preset) {
   // Generation
   if (m.steps)       { set('inp-steps', m.steps);   $('sl-steps').value = m.steps;   $('lbl-steps').textContent = m.steps; }
   if (m.cfgscale)    { set('inp-cfg',   m.cfgscale); $('sl-cfg').value   = m.cfgscale; $('lbl-cfg').textContent   = m.cfgscale; }
-  if (m.samplername) { $('sel-sampler').value   = m.samplername; }
+  if (m.sampler)     { $('sel-sampler').value   = m.sampler; }
+  if (m.samplername) { $('sel-sampler').value   = m.samplername; } // compat anciens presets
   if (m.scheduler)   { $('sel-scheduler').value = m.scheduler; }
   if (m.seed !== undefined) set('inp-seed', m.seed);
 
@@ -666,7 +680,7 @@ function collectParamMap() {
   m.vae            = g('sel-vae') || undefined;
   m.steps          = g('inp-steps');
   m.cfgscale       = g('inp-cfg');
-  m.samplername    = g('sel-sampler');
+  m.sampler        = g('sel-sampler');
   m.scheduler      = g('sel-scheduler');
   m.seed           = g('inp-seed');
   m.width          = g('inp-width');

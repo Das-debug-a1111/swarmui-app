@@ -222,7 +222,7 @@ const Scheduler = (() => {
           height:         +task.height|| 1024,
           seed:           task.seed ?? -1,
         };
-        if (task.sampler) payload.samplername = task.sampler;
+        if (task.sampler) payload.sampler = task.sampler;
         const cn = task.controlnet;
         if (cn && cn.enabled && cn.image) {
           payload.controlnetimage     = cn.image;
