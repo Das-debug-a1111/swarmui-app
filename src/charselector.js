@@ -19,6 +19,8 @@ const CharSelector = (() => {
   let panelOpen    = false;
   let globalWeight = parseFloat(localStorage.getItem('cs-gweight')  || '1.0');
 
+  let lastFocusedPrompt = null;
+
   let searchQ        = '';
   let showFavOnly    = false;
   let showActiveOnly = false;
@@ -78,7 +80,8 @@ const CharSelector = (() => {
 
   // ── Active char sync ─────────────────────────────────────────────────────────
   function syncFromPrompt() {
-    const prompt = ($('inp-positive')?.value || '').toLowerCase();
+    const target = lastFocusedPrompt || $('inp-positive');
+    const prompt = (target?.value || '').toLowerCase();
     activeChars = new Set(
       allChars
         .map(c => c.name)
@@ -102,12 +105,16 @@ const CharSelector = (() => {
   }
 
   function watchPrompt() {
-    const ta = $('inp-positive');
-    if (!ta) return;
-    let t;
-    ta.addEventListener('input', () => {
-      clearTimeout(t);
-      t = setTimeout(() => syncFromPrompt(), 200);
+    const ids = ['inp-positive', 'inp-negative', 'inp-prompt', 'inp-neg', 'sws-f-prompt', 'sws-f-neg'];
+    ids.forEach(id => {
+      const ta = document.getElementById(id);
+      if (!ta) return;
+      ta.addEventListener('focus', () => { lastFocusedPrompt = ta; });
+      let t;
+      ta.addEventListener('input', () => {
+        clearTimeout(t);
+        t = setTimeout(() => syncFromPrompt(), 200);
+      });
     });
   }
 
@@ -245,10 +252,7 @@ const CharSelector = (() => {
 
   // ── Select / deselect ─────────────────────────────────────────────────────────
   function selectChar(name) {
-    const target = (document.activeElement?.tagName === 'TEXTAREA' &&
-                    document.activeElement.closest('#prompt-area'))
-      ? document.activeElement
-      : $('inp-positive');
+    const target = lastFocusedPrompt || $('inp-positive');
     if (!target) return;
 
     if (activeChars.has(name)) {
@@ -262,8 +266,8 @@ const CharSelector = (() => {
     const text  = tag + extra;
 
     const pos    = target.selectionEnd ?? target.value.length;
-    const before = target.value.slice(0, pos).replace(/,\s*$/, '');
-    const after  = target.value.slice(pos).replace(/^,?\s*/, '');
+    const before = target.value.slice(0, pos).replace(/,[ \t]*$/, '');
+    const after  = target.value.slice(pos).replace(/^[ \t]*,?[ \t]*/, '');
     target.value = before + (before ? ', ' : '') + text + (after ? ', ' + after : '');
     target.dispatchEvent(new Event('input', { bubbles: true }));
     target.focus();
@@ -288,25 +292,25 @@ const CharSelector = (() => {
         m.startsWith(',') && m.endsWith(',') ? ',' : ''
       );
     }
-    target.value = val.replace(/^\s*,\s*|\s*,\s*$/g, '').replace(/,\s*,/g, ',').trim();
+    target.value = val.replace(/^[ \t]*,[ \t]*|[ \t]*,[ \t]*$/g, '').replace(/,[ \t]*,/g, ',').trim();
     target.dispatchEvent(new Event('input', { bubbles: true }));
     syncFromPrompt();
     renderVirtual();
   }
 
   function clearAll() {
-    const target = $('inp-positive');
+    const target = lastFocusedPrompt || $('inp-positive');
     if (!target) return;
     let val = target.value;
     for (const name of activeChars) {
       const patterns = [`\\(${escRe(name)}:[0-9.]+\\)`, escRe(name)];
       for (const pat of patterns) {
-        val = val.replace(new RegExp(`(?:,\\s*)?${pat}(?:\\s*,)?`, 'gi'), m =>
+        val = val.replace(new RegExp(`(?:,[ \\t]*)?${pat}(?:[ \\t]*,)?`, 'gi'), m =>
           m.startsWith(',') && m.endsWith(',') ? ',' : ''
         );
       }
     }
-    target.value = val.replace(/^\s*,\s*|\s*,\s*$/g, '').replace(/,\s*,/g, ',').trim();
+    target.value = val.replace(/^[ \t]*,[ \t]*|[ \t]*,[ \t]*$/g, '').replace(/,[ \t]*,/g, ',').trim();
     target.dispatchEvent(new Event('input', { bubbles: true }));
     syncFromPrompt();
     renderVirtual();
@@ -381,10 +385,19 @@ const CharSelector = (() => {
     panelOpen = !panelOpen;
     $('cs-panel').classList.toggle('open', panelOpen);
     $('cs-toggle-btn')?.classList.toggle('active', panelOpen);
+    document.body.classList.toggle('cs-panel-open', panelOpen);
     if (panelOpen) {
       if (allChars.length === 0) init().then(() => renderVirtual());
       else setTimeout(() => renderVirtual(), 50);
     }
+  }
+
+  // Open panel and pre-set the target textarea (called from context-specific buttons)
+  function toggleFor(targetId) {
+    const ta = document.getElementById(targetId);
+    if (ta) lastFocusedPrompt = ta;
+    toggle();
+    if (panelOpen) syncFromPrompt();
   }
 
   // ── Bind controls ─────────────────────────────────────────────────────────────
@@ -444,6 +457,7 @@ const CharSelector = (() => {
       panelOpen = false;
       $('cs-panel').classList.remove('open');
       $('cs-toggle-btn')?.classList.remove('active');
+      document.body.classList.remove('cs-panel-open');
     });
 
     $('cs-grid')?.addEventListener('scroll', renderVirtual, { passive: true });
@@ -452,5 +466,5 @@ const CharSelector = (() => {
     watchPrompt();
   }
 
-  return { init, bindControls };
+  return { init, bindControls, toggle, toggleFor };
 })();

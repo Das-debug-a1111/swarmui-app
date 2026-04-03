@@ -11,20 +11,100 @@ const Inpaint = (() => {
   ];
 
   const S = {
-    image:        null,
-    imageData:    null,
-    maskCanvas:   null,
-    maskCtx:      null,
-    drawing:      false,
-    tool:         'brush',
-    brushSize:    40,
-    brushOpacity: 1.0,
-    undoStack:    [],
-    running:      false,
-    initialized:  false,
-    pendingCrop:  null,  // bbox for only_masked recomposite
-    pendingWhole: false, // flag for whole-picture recomposite
+    image:            null,
+    imageData:        null,
+    maskCanvas:       null,
+    maskCtx:          null,
+    drawing:          false,
+    tool:             'brush',
+    brushSize:        40,
+    brushOpacity:     1.0,
+    undoStack:        [],
+    running:          false,
+    initialized:      false,
+    pendingCrop:      null,  // bbox for only_masked recomposite
+    pendingWhole:     false, // flag for whole-picture recomposite
+    originalMetadata: null,  // raw JSON metadata from the source image
   };
+
+  // ── PNG tEXt chunk injector ───────────────────────────────────────────────
+  function crc32(buf) {
+    let c = 0xFFFFFFFF;
+    const table = crc32._t || (crc32._t = (() => {
+      const t = new Uint32Array(256);
+      for (let n = 0; n < 256; n++) {
+        let v = n;
+        for (let k = 0; k < 8; k++) v = (v & 1) ? (0xEDB88320 ^ (v >>> 1)) : (v >>> 1);
+        t[n] = v;
+      }
+      return t;
+    })());
+    for (let i = 0; i < buf.length; i++) c = table[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
+    return (c ^ 0xFFFFFFFF) >>> 0;
+  }
+
+  function extractPngMeta(buf) {
+    const bytes = new Uint8Array(buf);
+    const view  = new DataView(buf);
+    let off = 8;
+    while (off < buf.byteLength - 12) {
+      const len  = view.getUint32(off); off += 4;
+      const type = String.fromCharCode(bytes[off], bytes[off+1], bytes[off+2], bytes[off+3]); off += 4;
+      if (type === 'tEXt') {
+        const raw = bytes.slice(off, off + len);
+        const nul = raw.indexOf(0);
+        if (new TextDecoder().decode(raw.slice(0, nul)) === 'parameters')
+          return new TextDecoder().decode(raw.slice(nul + 1));
+      }
+      if (type === 'IEND') break;
+      off += len + 4;
+    }
+    return null;
+  }
+
+  function injectJpegCom(jpgBuf, text) {
+    const commentBytes = new TextEncoder().encode(text);
+    const segLen = 2 + commentBytes.length;
+    const com = new Uint8Array(4 + commentBytes.length);
+    com[0] = 0xFF; com[1] = 0xFE;
+    com[2] = (segLen >> 8) & 0xFF;
+    com[3] = segLen & 0xFF;
+    com.set(commentBytes, 4);
+    const jpg = new Uint8Array(jpgBuf);
+    const out = new Uint8Array(2 + com.length + jpg.length - 2);
+    out.set(jpg.slice(0, 2));
+    out.set(com, 2);
+    out.set(jpg.slice(2), 2 + com.length);
+    return out.buffer;
+  }
+
+  function injectPngMetadataBuf(buf, metadataJson) {
+    const raw = new Uint8Array(buf);
+    const view = new DataView(raw.buffer);
+
+    // Build tEXt chunk: key\0value
+    const enc     = new TextEncoder();
+    const keyVal  = new Uint8Array([...enc.encode('parameters'), 0, ...enc.encode(metadataJson)]);
+    const typeArr = enc.encode('tEXt');
+    const crcBuf  = new Uint8Array([...typeArr, ...keyVal]);
+    const crc     = crc32(crcBuf);
+
+    // Chunk = 4 (len) + 4 (type) + data + 4 (crc)
+    const chunk = new Uint8Array(4 + 4 + keyVal.length + 4);
+    const cv    = new DataView(chunk.buffer);
+    cv.setUint32(0, keyVal.length);
+    chunk.set(typeArr, 4);
+    chunk.set(keyVal, 8);
+    cv.setUint32(8 + keyVal.length, crc);
+
+    // Insert after IHDR chunk (offset 8 sig + 4 len + 4 type + 13 data + 4 crc = 33)
+    const out = new Uint8Array(raw.length + chunk.length);
+    out.set(raw.slice(0, 33), 0);
+    out.set(chunk, 33);
+    out.set(raw.slice(33), 33 + chunk.length);
+
+    return out.buffer;
+  }
 
   const PRESET_KEY = 'swi-inpaint-presets';
 
@@ -157,9 +237,9 @@ const Inpaint = (() => {
     });
     q('inp-auto-ratio').onclick = applyAutoRatio;
 
-    // Area toggle
+    // Area toggle (no auto-ratio on change)
     document.querySelectorAll('input[name="inp-area"]').forEach(r => {
-      r.onchange = () => syncSizeToArea();
+      r.onchange = () => {};
     });
 
     // Paste
@@ -201,14 +281,44 @@ const Inpaint = (() => {
       ctxMenu?.classList.remove('open');
       if (src) loadFromSrc(src);
     };
-    q('inp-ctx-dl').onclick = () => {
+    q('inp-ctx-dl').onclick = async () => {
       const src = ctxMenu?._src;
       ctxMenu?.classList.remove('open');
       if (!src) return;
-      const a = document.createElement('a');
-      a.href = src;
-      a.download = src.split('/').pop().split('?')[0] || 'inpaint.png';
-      a.click();
+      try {
+        const res   = await fetch(src);
+        const buf   = await res.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        const isPNG = bytes[0] === 0x89 && bytes[1] === 0x50;
+
+        // Extract metadata: from result PNG first, fallback to source image metadata
+        const metaJson = (isPNG ? extractPngMeta(buf) : null) || S.originalMetadata || null;
+
+        let blob;
+        if (isPNG) {
+          const bmp = await createImageBitmap(new Blob([buf], { type: 'image/png' }));
+          const c   = document.createElement('canvas');
+          c.width = bmp.width; c.height = bmp.height;
+          c.getContext('2d').drawImage(bmp, 0, 0);
+          blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.95));
+        } else {
+          blob = new Blob([buf], { type: 'image/jpeg' });
+        }
+
+        // Inject metadata as JPEG COM segment
+        if (metaJson) {
+          const jpgBuf = await blob.arrayBuffer();
+          blob = new Blob([injectJpegCom(jpgBuf, metaJson)], { type: 'image/jpeg' });
+        }
+
+        const a = document.createElement('a');
+        a.href     = URL.createObjectURL(blob);
+        a.download = `inpaint-${Date.now()}.jpg`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+      } catch {
+        const a = document.createElement('a'); a.href = src; a.download = `inpaint-${Date.now()}.jpg`; a.click();
+      }
     };
   }
 
@@ -320,7 +430,7 @@ const Inpaint = (() => {
     const reader = new FileReader();
     reader.onload = e => {
       const img = new Image();
-      img.onload = () => { S.image = img; S.imageData = e.target.result; setupCanvas(img); syncSizeToArea(); };
+      img.onload = () => { S.image = img; S.imageData = e.target.result; setupCanvas(img); };
       img.src = e.target.result;
     };
     reader.readAsDataURL(file);
@@ -328,22 +438,85 @@ const Inpaint = (() => {
 
   function loadFromSrc(src) {
     setStatus('Loading image…');
+    S.originalMetadata = null;
     if (src.startsWith('data:')) {
       const img = new Image();
-      img.onload = () => { S.image = img; S.imageData = src; setupCanvas(img); applyAutoRatio(); setStatus(''); };
+      img.onload = () => { S.image = img; S.imageData = src; setupCanvas(img); setStatus(''); };
       img.src = src;
     } else {
       fetch(src)
         .then(r => r.blob())
-        .then(blob => new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload  = e => resolve(e.target.result);
-          reader.onerror = reject;
-          reader.readAsDataURL(blob);
-        }))
+        .then(async blob => {
+          // Parse metadata from binary
+          try {
+            const buf   = await blob.arrayBuffer();
+            const bytes = new Uint8Array(buf);
+            const isPNG = bytes[0] === 0x89 && bytes[1] === 0x50;
+            const isJPG = bytes[0] === 0xFF && bytes[1] === 0xD8;
+            if (isPNG) {
+              const view = new DataView(buf);
+              let off = 8;
+              while (off < buf.byteLength - 12) {
+                const len  = view.getUint32(off); off += 4;
+                const type = String.fromCharCode(bytes[off], bytes[off+1], bytes[off+2], bytes[off+3]); off += 4;
+                if (type === 'tEXt') {
+                  const raw = bytes.slice(off, off + len);
+                  const nul = raw.indexOf(0);
+                  if (new TextDecoder().decode(raw.slice(0, nul)) === 'parameters') {
+                    S.originalMetadata = new TextDecoder().decode(raw.slice(nul + 1)); break;
+                  }
+                }
+                if (type === 'IEND') break;
+                off += len + 4;
+              }
+            } else if (isJPG) {
+              let off = 2;
+              while (off < bytes.length - 4) {
+                if (bytes[off] !== 0xFF) break;
+                const marker = bytes[off + 1];
+                const segLen = (bytes[off + 2] << 8) | bytes[off + 3];
+                if (marker === 0xE1) {
+                  const hdr = new TextDecoder('ascii').decode(bytes.slice(off + 4, off + 10));
+                  if (hdr.startsWith('Exif\0')) {
+                    const exifBase = off + 10;
+                    const tiff = new DataView(buf, exifBase);
+                    const le   = tiff.getUint16(0) === 0x4949;
+                    const rd16 = o => tiff.getUint16(o, le);
+                    const rd32 = o => tiff.getUint32(o, le);
+                    const ifd0 = rd32(4); const n0 = rd16(ifd0);
+                    let exifIfdOff = 0;
+                    for (let i = 0; i < n0; i++) { const e = ifd0 + 2 + i * 12; if (rd16(e) === 0x8769) { exifIfdOff = rd32(e + 8); break; } }
+                    if (exifIfdOff) {
+                      const nE = rd16(exifIfdOff);
+                      for (let i = 0; i < nE; i++) {
+                        const e = exifIfdOff + 2 + i * 12;
+                        if (rd16(e) === 0x9286) {
+                          const count = rd32(e + 4), valOff = rd32(e + 8);
+                          const rawFull = new Uint8Array(buf, exifBase + valOff, count);
+                          const prefix  = new TextDecoder('ascii').decode(rawFull.slice(0, 8));
+                          const skip    = prefix.trimEnd().replace(/\0/g, '').match(/^(ASCII|UNICODE|JIS)$/) ? 8 : 0;
+                          S.originalMetadata = new TextDecoder().decode(rawFull.slice(skip)).replace(/\0/g, '').trim();
+                          break;
+                        }
+                      }
+                    }
+                  }
+                }
+                if (marker === 0xDA) break;
+                off += 2 + segLen;
+              }
+            }
+          } catch {}
+          return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload  = e => resolve(e.target.result);
+            reader.onerror = reject;
+            reader.readAsDataURL(blob);
+          });
+        })
         .then(dataUrl => {
           const img = new Image();
-          img.onload = () => { S.image = img; S.imageData = dataUrl; setupCanvas(img); applyAutoRatio(); setStatus(''); };
+          img.onload = () => { S.image = img; S.imageData = dataUrl; setupCanvas(img); setStatus(''); };
           img.src = dataUrl;
         })
         .catch(err => setStatus(`❌ ${err.message}`));
@@ -660,7 +833,18 @@ const Inpaint = (() => {
       };
 
       if (mode === 'only_masked') {
-        const crop = buildOnlyMaskedPayload(1024, 1024, pad);
+        // Ratio-correct target size based on bbox
+        const rawBbox = getMaskBBox();
+        if (!rawBbox) {
+          setStatus('⚠ Paint a mask first');
+          S.running = false;
+          btn.textContent = 'Generate'; btn.style.background = '';
+          return;
+        }
+        const cropW = +q('inp-w').value || 1024;
+        const cropH = +q('inp-h').value || 1024;
+
+        const crop = buildOnlyMaskedPayload(cropW, cropH, pad);
         if (!crop) {
           setStatus('⚠ Paint a mask first');
           S.running = false;
@@ -669,8 +853,8 @@ const Inpaint = (() => {
         }
         payload.initimage = crop.initImage;
         payload.maskimage = crop.maskImage;
-        payload.width     = 1024;
-        payload.height    = 1024;
+        payload.width     = cropW;
+        payload.height    = cropH;
         S.pendingCrop  = crop.bbox;
         S.pendingWhole = false;
       } else {

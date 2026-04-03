@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>SwarmUI</title>
+  <title>Swarm-App</title>
   <link rel="stylesheet" href="styles/main.css">
 </head>
 <body>
@@ -18,11 +18,12 @@
 
   <!-- ── Top bar ─────────────────────────────────────────────────────────── -->
   <div id="topbar">
-    <div class="app-title">SwarmUI</div>
+    <div class="app-title">Swarm-App</div>
     <div class="tabs">
       <div class="tab active" data-tab="txt2img">Txt2Img</div>
       <div class="tab" data-tab="inpaint">Inpaint</div>
       <div class="tab" data-tab="scheduler">Scheduler</div>
+      <div class="tab" data-tab="pnginfo">PNG Info</div>
     </div>
     <div id="status-bar">
       <div class="status-dot" id="status-dot"></div>
@@ -271,6 +272,14 @@
       </div>
       <div class="sidebar-section-body hidden" id="sec-tags">
         <div style="color:var(--text2);font-size:11px;margin-bottom:8px" id="tc-stats">—</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">
+          <select class="inp" id="tc-dataset-sel" style="flex:1;font-size:11px">
+            <option value="danbooru">Danbooru</option>
+            <option value="e621">e621</option>
+            <option value="danbooru_e621_merged">Danbooru + e621</option>
+          </select>
+          <button class="btn-secondary" id="tc-download-db" style="flex:1">⬇ Download</button>
+        </div>
         <div style="display:flex;gap:6px;flex-wrap:wrap">
           <button class="btn-secondary" id="tc-load-csv" style="flex:1">Load CSV</button>
           <button class="btn-secondary btn-danger" id="tc-clear-extra" style="flex:1">Clear extra</button>
@@ -526,7 +535,10 @@
       <div class="inp-sec">
         <div class="inp-sec-hdr">Prompts <span class="arrow">▼</span></div>
         <div class="inp-sec-body">
-          <label style="font-size:10px;color:var(--muted);margin-bottom:2px;display:block">Positive</label>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
+            <label style="font-size:10px;color:var(--muted)">Positive</label>
+            <button onclick="CharSelector.toggleFor('inp-prompt')" class="cs-toggle-btn" style="font-size:10px;padding:2px 7px">Characters</button>
+          </div>
           <textarea class="inp-ta" id="inp-prompt" rows="4" placeholder="Positive prompt…"></textarea>
           <label style="font-size:10px;color:var(--muted);margin:6px 0 2px;display:block">Negative</label>
           <textarea class="inp-ta" id="inp-neg"    rows="2" placeholder="Negative…"></textarea>
@@ -561,6 +573,7 @@
         <button class="sws-btn danger"  id="sws-btn-stop" disabled>⏹ Stop</button>
         <button class="sws-btn" id="sws-btn-connect">⟳ Connect</button>
         <button class="sws-btn sm" id="sws-btn-reset">↺ Reset</button>
+        <button class="sws-btn sm" id="sws-btn-cleardone">🗑 Clear done</button>
         <button class="sws-btn sm" id="sws-btn-save">💾</button>
         <button class="sws-btn sm" id="sws-btn-load">📂</button>
         <input type="file" id="sws-file" accept=".json" style="display:none">
@@ -598,6 +611,38 @@
 
   </div><!-- /view-scheduler -->
 
+  <!-- ── PNG Info view ─────────────────────────────────────────────────────── -->
+  <div id="view-pnginfo">
+    <div id="pnginfo-container">
+      <div id="pnginfo-drop" class="pnginfo-dropzone">
+        <input type="file" id="pnginfo-file-input" accept="image/*" style="display:none">
+        <div class="pnginfo-drop-inner" id="pnginfo-drop-inner">
+          <div class="pnginfo-drop-icon">🖼</div>
+          <div class="pnginfo-drop-text">Glisse une image ici</div>
+          <div class="pnginfo-drop-sub">ou</div>
+          <button class="btn-secondary" id="pnginfo-browse">Choisir un fichier</button>
+        </div>
+      </div>
+      <div id="pnginfo-result" style="display:none">
+        <div id="pnginfo-preview-wrap">
+          <img id="pnginfo-preview" src="" alt="">
+        </div>
+        <div id="pnginfo-meta-wrap">
+          <div class="pnginfo-meta-header">
+            <span class="pnginfo-meta-title">Métadonnées</span>
+            <button class="btn-primary"   id="pnginfo-send-txt2img" style="font-size:11px;padding:3px 10px">→ txt2img</button>
+            <button class="btn-secondary" id="pnginfo-seed-lock"    style="font-size:11px;padding:3px 7px" title="Copier la seed">🎲</button>
+            <button class="btn-secondary" id="pnginfo-copy-prompt"  style="font-size:11px;padding:3px 8px">Prompt</button>
+            <button class="btn-secondary" id="pnginfo-copy-params"  style="font-size:11px;padding:3px 8px">Paramètres</button>
+            <button class="btn-secondary" id="pnginfo-copy">Tout</button>
+            <button class="btn-secondary" id="pnginfo-clear">✕ Effacer</button>
+          </div>
+          <textarea id="pnginfo-meta-text" readonly></textarea>
+        </div>
+      </div>
+    </div>
+  </div><!-- /view-pnginfo -->
+
   <!-- Scheduler modals -->
   <div class="sws-overlay" id="sws-modal">
     <div class="sws-modal">
@@ -617,7 +662,10 @@
           <input class="sws-inp" id="sws-f-name" placeholder="My generation task">
         </div>
         <div class="sws-fg">
-          <label class="sws-lbl">Prompt</label>
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <label class="sws-lbl">Prompt</label>
+            <button onclick="CharSelector.toggleFor('sws-f-prompt')" class="cs-toggle-btn" style="font-size:10px;padding:2px 7px">Characters</button>
+          </div>
           <textarea class="sws-ta" id="sws-f-prompt" rows="4" placeholder="masterpiece, best quality, 1girl, ..."></textarea>
         </div>
         <div class="sws-fg">

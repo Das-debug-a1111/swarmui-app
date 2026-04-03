@@ -21,86 +21,6 @@ const TagComplete = (() => {
     4: 'character', 5: 'meta', 6: 'quality',
   };
 
-  // ── Built-in tag list [name, type, count, aliases] ─────────────────────────
-  const BUILTIN = [
-    ['masterpiece',6,6e6,''],['best quality',6,5e6,''],['high quality',6,4e6,''],
-    ['ultra detailed',6,3e6,''],['highly detailed',6,2.5e6,''],['detailed',6,2e6,''],
-    ['absurdres',5,2e6,''],['highres',5,1.5e6,''],['8k',6,1.5e6,''],['4k',6,1e6,''],
-    ['sharp focus',6,1e6,''],['intricate detail',6,8e5,''],
-    ['worst quality',5,4e6,''],['low quality',5,3.5e6,''],['lowres',5,3e6,''],
-    ['bad anatomy',5,3e6,''],['bad hands',5,2.5e6,''],['extra limbs',5,1.5e6,''],
-    ['missing limbs',5,1.2e6,''],['deformed',5,2e6,''],['mutated hands',5,1e6,''],
-    ['blurry',5,3e6,''],['ugly',5,2e6,''],['nsfw',5,3e6,''],
-    ['watermark',5,2e6,''],['signature',5,1.5e6,''],['text',5,3e6,''],
-    ['jpeg artifacts',5,2e6,''],['cropped',5,2e6,''],
-    ['anime',0,5e6,''],['manga',0,3e6,''],['realistic',0,4e6,''],
-    ['photorealistic',0,3.5e6,''],['illustration',0,3e6,''],['digital art',0,2.5e6,''],
-    ['concept art',0,2e6,''],['cinematic',0,1.8e6,''],['oil painting',0,1.5e6,''],
-    ['watercolor',0,1.2e6,''],['sketch',0,1.5e6,''],['lineart',0,1.3e6,''],
-    ['cel shading',0,8e5,''],['flat color',0,1e6,''],['pixel art',0,1.2e6,''],
-    ['1girl',0,1e7,''],['1boy',0,5e6,''],['2girls',0,3e6,''],['2boys',0,1.5e6,''],
-    ['solo',0,8e6,''],['multiple girls',0,2e6,''],['couple',0,1.5e6,''],
-    ['blonde hair',0,3e6,''],['black hair',0,3.5e6,''],['brown hair',0,2.5e6,''],
-    ['white hair',0,2e6,''],['silver hair',0,1.5e6,''],['blue hair',0,1.5e6,''],
-    ['pink hair',0,1.2e6,''],['red hair',0,1.8e6,''],['green hair',0,8e5,''],
-    ['purple hair',0,1e6,''],['orange hair',0,9e5,''],['grey hair',0,8e5,'gray hair'],
-    ['multicolored hair',0,1e6,''],['gradient hair',0,7e5,''],['streaked hair',0,6e5,''],
-    ['long hair',0,5e6,''],['short hair',0,4e6,''],['medium hair',0,2e6,''],
-    ['very long hair',0,2e6,''],['twin tails',0,2e6,'twintails'],['ponytail',0,2.5e6,''],
-    ['braid',0,1.5e6,''],['braided hair',0,1e6,''],['bangs',0,3e6,''],
-    ['ahoge',0,8e5,''],['curly hair',0,1.2e6,''],['wavy hair',0,1.5e6,''],
-    ['straight hair',0,1e6,''],['bob cut',0,8e5,''],['side ponytail',0,1e6,''],
-    ['drill hair',0,6e5,''],['hair bun',0,1e6,''],
-    ['blue eyes',0,4e6,''],['red eyes',0,3e6,''],['green eyes',0,2.5e6,''],
-    ['brown eyes',0,2e6,''],['purple eyes',0,1.5e6,''],['golden eyes',0,1e6,''],
-    ['amber eyes',0,8e5,''],['aqua eyes',0,9e5,''],['heterochromia',0,6e5,''],
-    ['large breasts',0,3e6,''],['medium breasts',0,2e6,''],['small breasts',0,1.5e6,''],
-    ['flat chest',0,1e6,''],['tall',0,1e6,''],['petite',0,8e5,''],
-    ['school uniform',0,3e6,''],['serafuku',0,1.5e6,''],['dress',0,3.5e6,''],
-    ['kimono',0,1.5e6,''],['yukata',0,8e5,''],['maid',0,2e6,'maid outfit|maid uniform'],
-    ['swimsuit',0,2.5e6,''],['bikini',0,2e6,''],['white shirt',0,2e6,''],
-    ['black dress',0,1.8e6,''],['jacket',0,2.5e6,''],['hoodie',0,1.5e6,''],
-    ['coat',0,2e6,''],['suit',0,1.5e6,''],['armor',0,2e6,''],
-    ['crop top',0,1.2e6,''],['tank top',0,1.5e6,''],['blouse',0,1.2e6,''],
-    ['skirt',0,3e6,''],['miniskirt',0,2e6,''],['pleated skirt',0,1.5e6,''],
-    ['thigh highs',0,2.5e6,'thighhighs'],['stockings',0,1.5e6,''],['pantyhose',0,1e6,''],
-    ['shorts',0,2e6,''],['jeans',0,1e6,''],['pants',0,1.5e6,''],
-    ['naked',0,2e6,'nude'],['nude',0,2.5e6,'naked'],['topless',0,1e6,''],
-    ['shirt',0,3e6,''],['t-shirt',0,1.5e6,''],['sweater',0,1.5e6,''],
-    ['gloves',0,1.5e6,''],['hat',0,2e6,''],['ribbon',0,2e6,''],
-    ['bow',0,2e6,''],['hair ribbon',0,1.5e6,''],['hair bow',0,1e6,''],
-    ['sitting',0,4e6,''],['standing',0,5e6,''],['lying',0,2e6,''],
-    ['kneeling',0,1e6,''],['jumping',0,8e5,''],['running',0,8e5,''],
-    ['walking',0,1.5e6,''],['leaning forward',0,1e6,''],
-    ['looking at viewer',0,6e6,''],['smile',0,5e6,''],['blush',0,4e6,''],
-    ['crying',0,1.5e6,''],['closed eyes',0,2e6,''],['open mouth',0,4e6,''],
-    ['grin',0,1.5e6,''],['expressionless',0,1e6,''],['embarrassed',0,1e6,''],
-    ['surprised',0,1e6,''],['angry',0,1e6,''],['sad',0,8e5,''],
-    ['seductive smile',0,7e5,''],['nervous',0,7e5,''],
-    ['arms up',0,1.5e6,''],['hand on hip',0,1.2e6,''],['hands on hips',0,1e6,''],
-    ['outstretched arms',0,6e5,''],['v',0,2e6,'peace sign'],
-    ['simple background',0,4e6,''],['white background',0,3e6,''],
-    ['outdoors',0,2e6,'outdoor'],['indoors',0,2.5e6,''],['night',0,2.5e6,''],
-    ['day',0,2e6,''],['sunset',0,1.5e6,''],['sky',0,3e6,''],
-    ['forest',0,1.5e6,''],['city',0,2e6,''],['classroom',0,1e6,''],
-    ['bedroom',0,1.2e6,''],['kitchen',0,8e5,''],['beach',0,1.5e6,''],
-    ['cafe',0,8e5,''],['park',0,1e6,''],['street',0,1.2e6,''],
-    ['snow',0,1.5e6,''],['rain',0,1e6,''],['cherry blossoms',0,1.2e6,'sakura'],
-    ['soft lighting',0,1.5e6,''],['dramatic lighting',0,1.2e6,''],
-    ['backlighting',0,1e6,''],['rim lighting',0,8e5,''],['neon lights',0,1.2e6,''],
-    ['sunlight',0,2e6,''],['moonlight',0,1e6,''],['candlelight',0,6e5,''],
-    ['volumetric lighting',0,8e5,''],['bokeh',0,1.2e6,''],
-    ['close-up',0,2.5e6,'closeup'],['portrait',0,3e6,''],['full body',0,3e6,''],
-    ['upper body',0,3.5e6,''],['bust shot',0,2e6,''],['cowboy shot',0,2e6,''],
-    ['side view',0,2e6,''],['from above',0,1.5e6,''],['from below',0,8e5,''],
-    ['wide shot',0,1.5e6,''],['dutch angle',0,6e5,''],['fisheye',0,4e5,''],
-    ['vibrant colors',0,1e6,''],['muted colors',0,6e5,''],['monochrome',0,2e6,''],
-    ['greyscale',0,1.5e6,'grayscale'],['depth of field',0,1.5e6,''],
-    ['motion blur',0,6e5,''],['lens flare',0,8e5,''],['film grain',0,6e5,''],
-    ['dark skin',0,1e6,''],['tan',0,8e5,''],['pale skin',0,7e5,''],
-    ['gyaru',0,5e5,''],['gyaru-o',0,2e5,''],
-  ];
-
   // ── DB ─────────────────────────────────────────────────────────────────────
   let DB = [];
   let recentlyUsed = [];  // array of tag names, most recent first
@@ -115,16 +35,9 @@ const TagComplete = (() => {
   }
 
   function buildDB() {
-    DB = BUILTIN.map(([name, type, count, aliases]) => ({
-      name, type, count,
-      aliases: aliases ? aliases.split('|').filter(Boolean) : [],
-      lower: name.toLowerCase(),
-    }));
     try {
-      const extra = JSON.parse(localStorage.getItem('tc-extra') || '[]');
-      const seen = new Set(DB.map(t => t.lower));
-      extra.forEach(t => { if (!seen.has(t.lower)) { DB.push(t); seen.add(t.lower); } });
-    } catch {}
+      DB = JSON.parse(localStorage.getItem('tc-extra') || '[]');
+    } catch { DB = []; }
     DB.sort((a, b) => b.count - a.count);
   }
 
@@ -170,9 +83,7 @@ const TagComplete = (() => {
     const seen = new Set(DB.map(t => t.lower));
     tags.forEach(t => { if (!seen.has(t.lower)) { DB.push(t); seen.add(t.lower); } });
     DB.sort((a,b) => b.count - a.count);
-    const builtinSet = new Set(BUILTIN.map(([n]) => n.toLowerCase()));
-    const extras = DB.filter(t => !builtinSet.has(t.lower));
-    try { localStorage.setItem('tc-extra', JSON.stringify(extras)); } catch {}
+    try { localStorage.setItem('tc-extra', JSON.stringify(DB)); } catch {}
     updateStats();
   }
 
@@ -269,7 +180,7 @@ const TagComplete = (() => {
     if (!currentEl) return;
     const text   = currentEl.value;
     const before = text.slice(0, tagStart);
-    const after  = text.slice(tagEnd).replace(/^\s*,?\s*/, '');
+    const after  = text.slice(tagEnd).replace(/^[ \t]*,?[ \t]*/, '');
     currentEl.value = before + tag.name + (after ? ', ' + after : ', ');
     const cur = tagStart + tag.name.length + 2;
     currentEl.setSelectionRange(cur, cur);
@@ -473,7 +384,12 @@ const TagComplete = (() => {
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
       setActive(Math.max(activeIdx - 1, -1));
-    } else if ((e.key === 'Enter' || e.key === 'Tab') && activeIdx >= 0) {
+    } else if (e.key === 'Tab') {
+      // Tab always picks from autocomplete if dropdown is open (first item if none selected)
+      e.preventDefault();
+      const idx = activeIdx >= 0 ? activeIdx : 0;
+      rows[idx].dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    } else if (e.key === 'Enter' && activeIdx >= 0) {
       e.preventDefault();
       rows[activeIdx].dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     } else if (e.key === 'Escape') {
@@ -520,6 +436,28 @@ const TagComplete = (() => {
         reader.readAsText(file);
       };
       input.click();
+    });
+
+    const DATASET_URLS = {
+      danbooru:             'https://raw.githubusercontent.com/DominikDoom/a1111-sd-webui-tagcomplete/main/tags/danbooru.csv',
+      e621:                 'https://raw.githubusercontent.com/DominikDoom/a1111-sd-webui-tagcomplete/main/tags/e621.csv',
+      danbooru_e621_merged: 'https://raw.githubusercontent.com/DominikDoom/a1111-sd-webui-tagcomplete/main/tags/danbooru_e621_merged.csv',
+    };
+
+    document.getElementById('tc-download-db')?.addEventListener('click', async () => {
+      const sel = document.getElementById('tc-dataset-sel')?.value || 'danbooru';
+      const url = DATASET_URLS[sel];
+      showMsg('Téléchargement…');
+      try {
+        const resp = await fetch(url);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        const text = await resp.text();
+        const tags = parseCSV(text);
+        mergeExtra(tags);
+        showMsg(`✓ ${tags.length.toLocaleString()} tags chargés. Total: ${DB.length.toLocaleString()}`);
+      } catch (e) {
+        showMsg(`❌ Erreur: ${e.message}`);
+      }
     });
 
     document.getElementById('tc-clear-extra')?.addEventListener('click', () => {

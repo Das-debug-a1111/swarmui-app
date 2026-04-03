@@ -1,6 +1,6 @@
 {
-  "name": "swarmui-app",
-  "version": "1.0.8",
+  "name": "swarm-app",
+  "version": "1.2.0",
   "description": "A native Electron frontend for SwarmUI — Txt2Img, Inpaint, Scheduler, Character Selector",
   "author": "das",
   "license": "MIT",
@@ -13,7 +13,7 @@
   },
   "build": {
     "appId": "com.swarmui.app",
-    "productName": "SwarmUI App",
+    "productName": "Swarm-App",
     "files": [
       "index.html",
       "main.js",
@@ -28,6 +28,7 @@
         "filter": ["**/*"]
       }
     ],
+    "artifactName": "${productName}-${arch}.${ext}",
     "mac": {
       "category": "public.app-category.graphics-design",
       "target": [{ "target": "dmg", "arch": ["arm64", "x64"] }]

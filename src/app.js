@@ -267,7 +267,9 @@ $('cn-img-clear').addEventListener('click', clearCNImage);
 
 // ── Sidebar: seed ─────────────────────────────────────────────────────────────
 $('btn-rand-seed').addEventListener('click', () => {
-  $('inp-seed').value = Math.floor(Math.random() * 2 ** 32);
+  $('inp-seed').value = -1;
+  App.seedLocked = false;
+  $('btn-lock-seed').classList.remove('active');
 });
 
 $('btn-lock-seed').addEventListener('click', () => {
@@ -448,10 +450,10 @@ function startGeneration() {
       if (!el) {
         el = document.createElement('img');
         el.id = 'gen-live-preview';
-        $('gallery').prepend(el);
       }
       el.src = dataUrl;
       el.style.display = 'block';
+      $('gallery').prepend(el); // toujours épinglé en premier
       $('gallery-empty').style.display = 'none';
     },
     onImage(imgData) {
@@ -507,6 +509,20 @@ function showErrorToast(msg) {
   toast._timer = setTimeout(() => toast.classList.remove('visible'), 8000);
 }
 
+function toast(msg) {
+  let el = document.getElementById('swarm-toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'swarm-toast';
+    el.style.cssText = 'position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:var(--bg3,#333);color:var(--text1,#fff);padding:7px 18px;border-radius:8px;font-size:13px;z-index:99999;pointer-events:none;transition:opacity .3s';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.opacity = '1';
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.style.opacity = '0'; }, 1800);
+}
+
 function finishGeneration() {
   if (!App.running) return;
   App.running = false;
@@ -555,16 +571,14 @@ function addImageToGallery(img, groupLabel, isFirst) {
   div.innerHTML = `
     <img src="${img.url}" alt="Generated image" loading="lazy">
     <div class="gallery-img-actions">
-      <button class="gal-btn" data-action="view">View</button>
       <button class="gal-btn" data-action="seed">Seed</button>
       <button class="gal-btn" data-action="inpaint">Inpaint</button>
+      <button class="gal-btn" data-action="schedule">Sched</button>
+      <button class="gal-btn" data-action="info">Info</button>
       <button class="gal-btn" data-action="save">Save</button>
     </div>`;
 
-  div.querySelector('[data-action="view"]').addEventListener('click', e => {
-    e.stopPropagation();
-    openLightbox(img.url);
-  });
+
   div.querySelector('[data-action="seed"]').addEventListener('click', e => {
     e.stopPropagation();
     $('inp-seed').value = img.seed;
@@ -575,6 +589,14 @@ function addImageToGallery(img, groupLabel, isFirst) {
     e.stopPropagation();
     sendToInpaint(img.url);
   });
+  div.querySelector('[data-action="schedule"]').addEventListener('click', e => {
+    e.stopPropagation();
+    sendToScheduler(img.seed);
+  });
+  div.querySelector('[data-action="info"]').addEventListener('click', e => {
+    e.stopPropagation();
+    showPngInfo(img.url);
+  });
   div.querySelector('[data-action="save"]').addEventListener('click', e => {
     e.stopPropagation();
     downloadImage(img.url);
@@ -584,11 +606,248 @@ function addImageToGallery(img, groupLabel, isFirst) {
   row.appendChild(div);
 }
 
-function downloadImage(url) {
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `swarmui-${Date.now()}.png`;
-  a.click();
+async function showPngInfo(url) {
+  try {
+    const res   = await fetch(url);
+    const buf   = await res.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let rawJson = null;
+
+    const isPNG = bytes[0] === 0x89 && bytes[1] === 0x50;
+    const isJPG = bytes[0] === 0xFF && bytes[1] === 0xD8;
+
+    if (isPNG) {
+      const view = new DataView(buf);
+      let off = 8;
+      while (off < buf.byteLength - 12) {
+        const len  = view.getUint32(off); off += 4;
+        const type = String.fromCharCode(bytes[off], bytes[off+1], bytes[off+2], bytes[off+3]); off += 4;
+        if (type === 'tEXt') {
+          const raw = bytes.slice(off, off + len);
+          const nul = raw.indexOf(0);
+          if (new TextDecoder().decode(raw.slice(0, nul)) === 'parameters') {
+            rawJson = new TextDecoder().decode(raw.slice(nul + 1)); break;
+          }
+        }
+        if (type === 'IEND') break;
+        off += len + 4;
+      }
+    } else if (isJPG) {
+      let off = 2;
+      while (off < bytes.length - 4) {
+        if (bytes[off] !== 0xFF) break;
+        const marker = bytes[off + 1];
+        const segLen = (bytes[off + 2] << 8) | bytes[off + 3];
+        if (marker === 0xE1) {
+          const hdr = new TextDecoder('ascii').decode(bytes.slice(off + 4, off + 10));
+          if (hdr.startsWith('Exif\0')) {
+            const exifBase = off + 10;
+            const tiff = new DataView(buf, exifBase);
+            const le   = tiff.getUint16(0) === 0x4949;
+            const rd16 = o => tiff.getUint16(o, le);
+            const rd32 = o => tiff.getUint32(o, le);
+            const ifd0 = rd32(4);
+            const n0   = rd16(ifd0);
+            let exifIfdOff = 0;
+            for (let i = 0; i < n0; i++) {
+              const e = ifd0 + 2 + i * 12;
+              if (rd16(e) === 0x8769) { exifIfdOff = rd32(e + 8); break; }
+            }
+            if (exifIfdOff) {
+              const nE = rd16(exifIfdOff);
+              for (let i = 0; i < nE; i++) {
+                const e = exifIfdOff + 2 + i * 12;
+                if (rd16(e) === 0x9286) {
+                  const count  = rd32(e + 4);
+                  const valOff = rd32(e + 8);
+                  const rawFull = new Uint8Array(buf, exifBase + valOff, count);
+                  const prefix  = new TextDecoder('ascii').decode(rawFull.slice(0, 8));
+                  const skip    = prefix.trimEnd().replace(/\0/g, '').match(/^(ASCII|UNICODE|JIS)$/) ? 8 : 0;
+                  rawJson = new TextDecoder().decode(rawFull.slice(skip)).replace(/\0/g, '').trim();
+                  break;
+                }
+              }
+            }
+          }
+        }
+        if (marker === 0xDA) break;
+        off += 2 + segLen;
+      }
+    }
+
+    _showPngInfoModal(_formatMetadata(rawJson));
+  } catch (e) { console.error('[PNG Info]', e); _showPngInfoModal('Erreur de lecture.'); }
+}
+
+let _lastParsedMeta = null; // raw parsed sui_image_params for copy buttons
+
+function _formatMetadata(rawJson) {
+  _lastParsedMeta = null;
+  if (!rawJson) return 'Aucune métadonnée trouvée.';
+  try {
+    const parsed = JSON.parse(rawJson);
+    const params = parsed.sui_image_params || parsed;
+    const extra  = parsed.sui_extra_data   || {};
+    _lastParsedMeta = params;
+    const lines = Object.entries(params).map(([k, v]) => `${k}: ${v}`);
+    if (Object.keys(extra).length) lines.push('', ...Object.entries(extra).map(([k, v]) => `${k}: ${v}`));
+    return lines.join('\n');
+  } catch { return rawJson; }
+}
+
+function _normalizeEmbeds(text) {
+  // Convert A1111 format "embedding:name.safetensors" → SwarmUI "<embed:name>"
+  return text.replace(/\bembedding:([\w\-]+)(?:\.safetensors|\.pt|\.bin)?\b/g, '<embed:$1>');
+}
+
+let _sendWithSeed = false;
+
+function _sendToTxt2img(params) {
+  if (!params) return;
+  const p = params;
+  if (p.prompt)         $('inp-positive').value = _normalizeEmbeds(p.prompt);
+  if (p.negativeprompt) $('inp-negative').value = _normalizeEmbeds(p.negativeprompt);
+  if (p.steps)    { $('inp-steps').value = p.steps;    $('sl-steps').value = p.steps;    $('lbl-steps').textContent = p.steps; }
+  if (p.cfgscale) { $('inp-cfg').value   = p.cfgscale; $('sl-cfg').value   = p.cfgscale; $('lbl-cfg').textContent   = p.cfgscale; }
+  if (_sendWithSeed && p.seed) $('inp-seed').value = p.seed;
+  if (p.width)          $('inp-width').value    = p.width;
+  if (p.height)         $('inp-height').value   = p.height;
+  // Model/VAE/Sampler/Scheduler: set select value if the option exists
+  if (p.model) {
+    const sel = $('sel-model');
+    const opt = [...sel.options].find(o => o.value === p.model || o.text === p.model);
+    if (opt) sel.value = opt.value;
+  }
+  if (p.vae) {
+    const sel = $('sel-vae');
+    const opt = [...sel.options].find(o => o.value === p.vae || o.text === p.vae);
+    if (opt) sel.value = opt.value;
+  }
+  if (p.sampler) {
+    const sel = $('sel-sampler');
+    const opt = [...sel.options].find(o => o.value.toLowerCase() === p.sampler.toLowerCase() || o.text.toLowerCase() === p.sampler.toLowerCase());
+    if (opt) sel.value = opt.value;
+  }
+  if (p.scheduler) {
+    const sel = $('sel-scheduler');
+    const opt = [...sel.options].find(o => o.value.toLowerCase() === p.scheduler.toLowerCase() || o.text.toLowerCase() === p.scheduler.toLowerCase());
+    if (opt) sel.value = opt.value;
+  }
+  // Refiner / Hires Fix
+  if (p.refinerupscale !== undefined || p.refinermethod === 'PostApply') {
+    $('chk-refiner').checked = true;
+    $('refiner-fields').style.display = '';
+    if (p.refinermodel)             { const sel = $('sel-refiner-model'); const opt = [...sel.options].find(o => o.value === p.refinermodel); if (opt) sel.value = opt.value; }
+    if (p.refinerupscalemethod)     $('sel-refiner-method').value = p.refinerupscalemethod;
+    if (p.refinerupscale)           { $('inp-refiner-scale').value = p.refinerupscale; $('sl-refiner-scale').value = p.refinerupscale; $('lbl-refiner-scale').textContent = parseFloat(p.refinerupscale).toFixed(2) + '×'; }
+    if (p.refinercontrolpercentage) { $('inp-refiner-pct').value   = p.refinercontrolpercentage; $('sl-refiner-pct').value = p.refinercontrolpercentage; $('lbl-refiner-pct').textContent = Math.round(p.refinercontrolpercentage * 100) + '%'; }
+    if (p.refinersteps)             { $('inp-refiner-steps').value = p.refinersteps; $('sl-refiner-steps').value = p.refinersteps; $('lbl-refiner-steps').textContent = p.refinersteps; }
+    if (p.refinercfgscale)          { $('inp-refiner-cfg').value   = p.refinercfgscale; $('sl-refiner-cfg').value = p.refinercfgscale; $('lbl-refiner-cfg').textContent = p.refinercfgscale; }
+  } else {
+    $('chk-refiner').checked = false;
+    $('refiner-fields').style.display = 'none';
+  }
+  // Switch to txt2img tab
+  document.querySelector('.tab[data-tab="txt2img"]')?.click();
+  toast('Envoyé vers txt2img !');
+}
+
+function _buildParamsCopy(params) {
+  if (!params) return '';
+  const p = params;
+  const parts = [];
+  if (p.prompt)         parts.push(`Prompt: ${p.prompt}`);
+  if (p.negativeprompt) parts.push(`Negative: ${p.negativeprompt}`);
+  parts.push('---');
+  if (p.model)     parts.push(`Model: ${p.model}`);
+  if (p.vae)       parts.push(`VAE: ${p.vae}`);
+  if (p.steps)     parts.push(`Steps: ${p.steps}`);
+  if (p.cfgscale)  parts.push(`CFG: ${p.cfgscale}`);
+  if (p.sampler)   parts.push(`Sampler: ${p.sampler}`);
+  if (p.scheduler) parts.push(`Scheduler: ${p.scheduler}`);
+  if (p.seed)      parts.push(`Seed: ${p.seed}`);
+  if (p.width && p.height) parts.push(`Size: ${p.width}x${p.height}`);
+  if (p.refinermethod === 'PostApply' || p.refinerupscale !== undefined) {
+    parts.push('--- Hires Fix ---');
+    if (p.refinerupscalemethod)     parts.push(`HF Method: ${p.refinerupscalemethod}`);
+    if (p.refinerupscale)           parts.push(`HF Scale: ${p.refinerupscale}`);
+    if (p.refinercontrolpercentage) parts.push(`HF Switch at: ${Math.round(p.refinercontrolpercentage * 100)}%`);
+    if (p.refinersteps)             parts.push(`HF Steps: ${p.refinersteps}`);
+    if (p.refinercfgscale)          parts.push(`HF CFG: ${p.refinercfgscale}`);
+    if (p.refinermodel)             parts.push(`HF Model: ${p.refinermodel}`);
+  }
+  return parts.join('\n');
+}
+
+function _showPngInfoModal(text) {
+  let modal = document.getElementById('png-info-modal');
+  if (!modal) {
+    modal = document.createElement('div');
+    modal.id = 'png-info-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;display:flex;align-items:center;justify-content:center';
+    modal.innerHTML = `
+      <div style="background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:20px;max-width:700px;width:90%;height:70vh;display:flex;flex-direction:column;gap:12px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+          <span style="font-weight:600;color:var(--text1)">PNG Info</span>
+          <div style="display:flex;gap:6px;margin-left:auto;flex-wrap:wrap">
+            <button id="png-info-send-txt2img" class="btn-primary"   style="font-size:11px;padding:3px 10px">→ txt2img</button>
+            <button id="png-info-seed-lock"   class="btn-secondary" style="font-size:11px;padding:3px 7px" title="Copier la seed">🎲</button>
+            <button id="png-info-copy-prompt" class="btn-secondary" style="font-size:11px;padding:3px 8px">Prompt</button>
+            <button id="png-info-copy-params" class="btn-secondary" style="font-size:11px;padding:3px 8px">Paramètres</button>
+            <button id="png-info-copy-all"    class="btn-secondary" style="font-size:11px;padding:3px 8px">Tout</button>
+            <button id="png-info-close" style="background:none;border:none;color:var(--text2);font-size:18px;cursor:pointer">✕</button>
+          </div>
+        </div>
+        <textarea id="png-info-text" readonly style="overflow:auto;font-size:11px;color:var(--text2);white-space:pre-wrap;flex:1;margin:0;background:transparent;border:none;resize:none;outline:none;cursor:text;font-family:inherit"></textarea>
+      </div>`;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+    modal.querySelector('#png-info-close').addEventListener('click', () => modal.remove());
+    modal.querySelector('#png-info-copy-all').addEventListener('click', () => {
+      navigator.clipboard.writeText(modal.querySelector('#png-info-text').value);
+      toast('Copié !', 'info');
+    });
+    modal.querySelector('#png-info-copy-prompt').addEventListener('click', () => {
+      const prompt = _lastParsedMeta?.prompt
+        || modal.querySelector('#png-info-text').value.match(/^prompt:\s*([\s\S]+?)(?=\n\w+:|$)/m)?.[1]?.trim()
+        || '';
+      navigator.clipboard.writeText(prompt);
+      toast('Prompt copié !', 'info');
+    });
+    modal.querySelector('#png-info-copy-params').addEventListener('click', () => {
+      navigator.clipboard.writeText(_buildParamsCopy(_lastParsedMeta));
+      toast('Paramètres copiés !', 'info');
+    });
+    modal.querySelector('#png-info-send-txt2img').addEventListener('click', () => {
+      _sendToTxt2img(_lastParsedMeta);
+      modal.remove();
+    });
+    modal.querySelector('#png-info-seed-lock').addEventListener('click', function() {
+      _sendWithSeed = !_sendWithSeed;
+      this.textContent = _sendWithSeed ? '🔒' : '🎲';
+      this.style.color = _sendWithSeed ? 'var(--accent)' : '';
+    });
+  }
+  modal.querySelector('#png-info-text').value = text;
+  document.body.appendChild(modal);
+}
+
+async function downloadImage(url) {
+  try {
+    const res  = await fetch(url);
+    const blob = await res.blob();
+    const ext  = blob.type.includes('png') ? 'png' : blob.type.includes('webp') ? 'webp' : 'jpg';
+    const a    = document.createElement('a');
+    a.href     = URL.createObjectURL(blob);
+    a.download = `swarmui-${Date.now()}.${ext}`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  } catch {
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `swarmui-${Date.now()}.jpg`;
+    a.click();
+  }
 }
 
 // ── Lightbox ──────────────────────────────────────────────────────────────────
@@ -773,10 +1032,12 @@ function switchTab(tab) {
   const isTxt  = tab === 'txt2img';
   const isInp  = tab === 'inpaint';
   const isSch  = tab === 'scheduler';
+  const isPng  = tab === 'pnginfo';
 
   $('view-txt2img').style.display = isTxt ? 'contents' : 'none';
   $('view-inpaint').classList.toggle('active', isInp);
   $('view-scheduler').classList.toggle('active', isSch);
+  $('view-pnginfo').classList.toggle('active', isPng);
 
   if (isInp) { Inpaint.init(); Inpaint.onShow(); }
   if (isSch) { Scheduler.init(); Scheduler.onShow(); }
@@ -791,6 +1052,206 @@ function sendToInpaint(url) {
   switchTab('inpaint');
   Inpaint.loadFromSrc(url);
 }
+
+// ── Send to Scheduler (from gallery) ─────────────────────────────────────────
+function sendToScheduler(seed) {
+  switchTab('scheduler');
+  Scheduler.init();
+  const hfEnabled = $('chk-refiner')?.checked || false;
+  Scheduler.openModalWith({
+    prompt:   $('inp-positive').value  || '',
+    negative: $('inp-negative').value  || '',
+    model:    $('sel-model').value     || '',
+    steps:    parseInt($('inp-steps').value)    || 20,
+    cfg:      parseFloat($('inp-cfg').value)    || 7,
+    sampler:  $('sel-sampler').value   || '',
+    seed:     seed ?? parseInt($('inp-seed').value) ?? -1,
+    width:    parseInt($('inp-width').value)    || 1024,
+    height:   parseInt($('inp-height').value)   || 1024,
+    hiresfix: {
+      enabled: hfEnabled,
+      model:   $('sel-refiner-model')?.value  || '',
+      method:  $('sel-refiner-method')?.value || '',
+      scale:   parseFloat($('inp-refiner-scale')?.value) || 1.5,
+      pct:     parseFloat($('inp-refiner-pct')?.value)   || 0.6,
+      steps:   parseInt($('inp-refiner-steps')?.value)   || 10,
+      cfg:     parseFloat($('inp-refiner-cfg')?.value)   || 7,
+    },
+  });
+}
+
+// ── PNG Info tab ─────────────────────────────────────────────────────────────
+(function initPngInfo() {
+  const drop      = document.getElementById('pnginfo-drop');
+  const fileInput = document.getElementById('pnginfo-file-input');
+  const browse    = document.getElementById('pnginfo-browse');
+  const result    = document.getElementById('pnginfo-result');
+  const preview   = document.getElementById('pnginfo-preview');
+  const metaText  = document.getElementById('pnginfo-meta-text');
+  const copyBtn         = document.getElementById('pnginfo-copy');
+  const copyPromptBtn   = document.getElementById('pnginfo-copy-prompt');
+  const copyParamsBtn   = document.getElementById('pnginfo-copy-params');
+  const sendTxt2imgBtn  = document.getElementById('pnginfo-send-txt2img');
+  const seedLockBtn     = document.getElementById('pnginfo-seed-lock');
+  const clearBtn        = document.getElementById('pnginfo-clear');
+  const dropInner = document.getElementById('pnginfo-drop-inner');
+
+  async function processFile(file) {
+    if (!file || !file.type.startsWith('image/')) return;
+    const objectUrl = URL.createObjectURL(file);
+    preview.src = objectUrl;
+    metaText.value = 'Lecture des métadonnées…';
+    result.style.display = 'flex';
+    drop.style.display = 'none';
+
+    const buf   = await file.arrayBuffer();
+    const bytes = new Uint8Array(buf);
+    let rawJson = null;
+
+    const isPNG = bytes[0] === 0x89 && bytes[1] === 0x50;
+    const isJPG = bytes[0] === 0xFF && bytes[1] === 0xD8;
+    console.log('[PNGInfo] type:', isPNG ? 'PNG' : isJPG ? 'JPG' : 'unknown', 'size:', buf.byteLength);
+
+    if (isPNG) {
+      const view = new DataView(buf);
+      let off = 8;
+      while (off < buf.byteLength - 12) {
+        const len  = view.getUint32(off); off += 4;
+        const type = String.fromCharCode(bytes[off], bytes[off+1], bytes[off+2], bytes[off+3]); off += 4;
+        console.log('[PNGInfo] chunk:', type, 'len:', len);
+        if (type === 'tEXt') {
+          const raw = bytes.slice(off, off + len);
+          const nul = raw.indexOf(0);
+          const key = new TextDecoder().decode(raw.slice(0, nul));
+          console.log('[PNGInfo] tEXt key:', key);
+          if (key === 'parameters') {
+            rawJson = new TextDecoder().decode(raw.slice(nul + 1)); break;
+          }
+        }
+        if (type === 'IEND') break;
+        off += len + 4;
+      }
+    } else if (isJPG) {
+      let off = 2;
+      while (off < bytes.length - 4) {
+        if (bytes[off] !== 0xFF) break;
+        const marker = bytes[off + 1];
+        const segLen = (bytes[off + 2] << 8) | bytes[off + 3];
+        console.log('[PNGInfo] JPEG marker:', '0x' + marker.toString(16), 'segLen:', segLen);
+        if (marker === 0xFE) { // COM segment — also try this
+          const com = new TextDecoder().decode(bytes.slice(off + 4, off + 2 + segLen)).trim();
+          console.log('[PNGInfo] COM:', com.slice(0, 100));
+          if (com.startsWith('{')) { rawJson = com; break; }
+        }
+        if (marker === 0xE1) {
+          const hdr = new TextDecoder('ascii').decode(bytes.slice(off + 4, off + 10));
+          console.log('[PNGInfo] APP1 hdr:', JSON.stringify(hdr));
+          if (hdr.startsWith('Exif\0')) {
+            const exifBase = off + 10;
+            const tiff = new DataView(buf, exifBase);
+            const le   = tiff.getUint16(0) === 0x4949;
+            console.log('[PNGInfo] EXIF byte order:', le ? 'LE' : 'BE');
+            const rd16 = o => tiff.getUint16(o, le);
+            const rd32 = o => tiff.getUint32(o, le);
+            const ifd0 = rd32(4);
+            const n0   = rd16(ifd0);
+            console.log('[PNGInfo] IFD0 offset:', ifd0, 'entries:', n0);
+            let exifIfdOff = 0;
+            for (let i = 0; i < n0; i++) {
+              const e = ifd0 + 2 + i * 12;
+              const tag = rd16(e);
+              console.log('[PNGInfo] IFD0 tag:', '0x' + tag.toString(16));
+              if (tag === 0x8769) { exifIfdOff = rd32(e + 8); break; }
+            }
+            console.log('[PNGInfo] ExifIFD offset:', exifIfdOff);
+            if (exifIfdOff) {
+              const nE = rd16(exifIfdOff);
+              for (let i = 0; i < nE; i++) {
+                const e = exifIfdOff + 2 + i * 12;
+                const tag = rd16(e);
+                console.log('[PNGInfo] ExifIFD tag:', '0x' + tag.toString(16));
+                if (tag === 0x9286) {
+                  const count  = rd32(e + 4);
+                  const valOff = rd32(e + 8);
+                  console.log('[PNGInfo] UserComment count:', count, 'valOff:', valOff);
+                  // Try without prefix first (some encoders skip the 8-byte charset prefix)
+                  const rawFull = new Uint8Array(buf, exifBase + valOff, count);
+                  const prefix  = new TextDecoder('ascii').decode(rawFull.slice(0, 8));
+                  console.log('[PNGInfo] UserComment prefix:', JSON.stringify(prefix));
+                  const skip = prefix.trimEnd().replace(/\0/g, '').match(/^(ASCII|UNICODE|JIS)$/) ? 8 : 0;
+                  rawJson = new TextDecoder().decode(rawFull.slice(skip)).replace(/\0/g, '').trim();
+                  console.log('[PNGInfo] UserComment value start:', rawJson.slice(0, 80));
+                  break;
+                }
+              }
+            }
+          }
+        }
+        if (marker === 0xDA) break;
+        off += 2 + segLen;
+      }
+    }
+
+    _lastParsedMeta = null;
+    let display = 'Aucune métadonnée trouvée.\n\nNote : SwarmUI n\'embarque les métadonnées que si "Save Metadata" est activé dans ses paramètres.';
+    if (rawJson) {
+      try {
+        const parsed = JSON.parse(rawJson);
+        const params = parsed.sui_image_params || parsed;
+        const extra  = parsed.sui_extra_data   || {};
+        _lastParsedMeta = params;
+        const lines  = Object.entries(params).map(([k, v]) => `${k}: ${v}`);
+        if (Object.keys(extra).length) lines.push('', ...Object.entries(extra).map(([k, v]) => `${k}: ${v}`));
+        display = lines.join('\n');
+      } catch { display = rawJson; }
+    }
+    metaText.value = display;
+  }
+
+  browse.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', () => { if (fileInput.files[0]) processFile(fileInput.files[0]); });
+
+  drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('drag-over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('drag-over'));
+  drop.addEventListener('drop', e => {
+    e.preventDefault();
+    drop.classList.remove('drag-over');
+    const file = e.dataTransfer.files[0];
+    if (file) processFile(file);
+  });
+
+  clearBtn.addEventListener('click', () => {
+    result.style.display = 'none';
+    drop.style.display = 'flex';
+    preview.src = '';
+    metaText.value = '';
+    fileInput.value = '';
+  });
+
+  copyBtn.addEventListener('click', () => {
+    navigator.clipboard.writeText(metaText.value).then(() => toast('Copié !', 'info'));
+  });
+  copyPromptBtn.addEventListener('click', () => {
+    const prompt = _lastParsedMeta?.prompt
+      || metaText.value.match(/^prompt:\s*([\s\S]+?)(?=\n\w+:|$)/m)?.[1]?.trim()
+      || '';
+    navigator.clipboard.writeText(prompt).then(() => toast('Prompt copié !', 'info'));
+  });
+  copyParamsBtn.addEventListener('click', () => {
+    navigator.clipboard.writeText(_buildParamsCopy(_lastParsedMeta)).then(() => toast('Paramètres copiés !', 'info'));
+  });
+  sendTxt2imgBtn.addEventListener('click', () => {
+    _sendToTxt2img(_lastParsedMeta);
+  });
+  seedLockBtn.addEventListener('click', function() {
+    _sendWithSeed = !_sendWithSeed;
+    this.textContent = _sendWithSeed ? '🔒' : '🎲';
+    this.style.color = _sendWithSeed ? 'var(--accent)' : '';
+    // Sync modal button if open
+    const modalBtn = document.getElementById('png-info-seed-lock');
+    if (modalBtn) { modalBtn.textContent = this.textContent; modalBtn.style.color = this.style.color; }
+  });
+})();
 
 // ── Connect button ────────────────────────────────────────────────────────────
 $('btn-connect').addEventListener('click', connect);

@@ -136,7 +136,7 @@ function createWindow() {
 
 app.whenReady().then(() => {
   createWindow();
-  autoUpdater.checkForUpdates().catch(() => {});
+  if (app.isPackaged) autoUpdater.checkForUpdates().catch(() => {});
 });
 
 autoUpdater.on('update-available', (info) => {

@@ -751,7 +751,7 @@ const Scheduler = (() => {
       if (g) {
         const doneCount = tasks.filter(t => t.status === 'done').length;
         const allDone   = doneCount === tasks.length;
-        html += `<div class="sws-group-hdr" onclick="Scheduler._toggleGroup(${JSON.stringify(g)})">
+        html += `<div class="sws-group-hdr" onclick='Scheduler._toggleGroup(${JSON.stringify(g)})'>
           <span>${collapsed ? '▶' : '▼'} 📁 ${esc(g)}</span>
           <span class="sws-group-count">${tasks.length} task${tasks.length>1?'s':''}${doneCount ? ` · ${doneCount} done` : ''}${allDone?' ✓':''}</span>
         </div>`;
@@ -918,6 +918,11 @@ const Scheduler = (() => {
     document.getElementById('sws-btn-stop').addEventListener('click', stopQueue);
     document.getElementById('sws-btn-connect').addEventListener('click', connect);
     document.getElementById('sws-btn-reset').addEventListener('click', resetAll);
+    document.getElementById('sws-btn-cleardone').addEventListener('click', () => {
+      S.tasks = S.tasks.filter(t => t.status !== 'done' && t.status !== 'error');
+      save(); render();
+      toast('Done tasks cleared', 'info');
+    });
     document.getElementById('sws-btn-save').addEventListener('click', exportQueue);
     document.getElementById('sws-btn-load').addEventListener('click', () => document.getElementById('sws-file').click());
     document.getElementById('sws-file').addEventListener('change', importQueue);
@@ -1045,10 +1050,49 @@ const Scheduler = (() => {
     return task ? { prompt: task.prompt || '', negative: task.negative || '' } : null;
   }
 
+  function openModalWith(data) {
+    populateModels();
+    populateCNModels();
+    document.getElementById('sws-edit-id').value = '';
+    document.getElementById('sws-modal-title').textContent = 'Add Task';
+    document.getElementById('sws-f-group').value   = data.group   || '';
+    document.getElementById('sws-f-name').value    = data.name    || `Task ${S.tasks.length + 1}`;
+    document.getElementById('sws-f-prompt').value  = data.prompt  || '';
+    document.getElementById('sws-f-neg').value     = data.negative|| '';
+    document.getElementById('sws-f-steps').value   = data.steps   || 20;
+    document.getElementById('sws-f-cfg').value     = data.cfg     || 7;
+    document.getElementById('sws-f-count').value   = data.count   || 4;
+    document.getElementById('sws-f-seed').value    = data.seed    ?? -1;
+    document.getElementById('sws-f-sampler').value = data.sampler || '';
+    document.getElementById('sws-f-w').value       = data.width   || 1024;
+    document.getElementById('sws-f-h').value       = data.height  || 1024;
+    if (data.model) setTimeout(() => { document.getElementById('sws-f-model').value = data.model; }, 100);
+    if (data.ratio) document.getElementById('sws-f-ratio').value = data.ratio;
+    // Reset CN to defaults
+    document.getElementById('sws-f-cn-enabled').checked = false;
+    document.getElementById('sws-cn-body').classList.remove('open');
+    document.getElementById('sws-cn-arrow').textContent = '▶';
+    Scheduler._cnImage = null;
+    // Apply HiresFix from data (or reset to defaults)
+    const hf = data.hiresfix || {};
+    document.getElementById('sws-f-hf-enabled').checked = !!hf.enabled;
+    document.getElementById('sws-hf-body').classList.toggle('open', !!hf.enabled);
+    document.getElementById('sws-hf-arrow').textContent = hf.enabled ? '▼' : '▶';
+    if (hf.method) document.getElementById('sws-f-hf-method').value = hf.method;
+    if (hf.scale)  document.getElementById('sws-f-hf-scale').value  = hf.scale;
+    if (hf.pct)    document.getElementById('sws-f-hf-pct').value    = hf.pct;
+    if (hf.steps)  document.getElementById('sws-f-hf-steps').value  = hf.steps;
+    if (hf.cfg)    document.getElementById('sws-f-hf-cfg').value    = hf.cfg;
+    onRatioChange();
+    document.getElementById('sws-modal').classList.add('open');
+    setTimeout(() => document.getElementById('sws-f-name').focus(), 50);
+  }
+
   return {
     init,
     onShow,
     getLastPrompts,
+    openModalWith,
     // Called from inline onclick handlers in rendered HTML
     _openModal:    id => openModal(id),
     _dup:          id => dupTask(id),
