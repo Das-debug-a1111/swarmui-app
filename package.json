@@ -7,8 +7,8 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build:mac":   "electron-builder --mac",
-    "build:win":   "electron-builder --win",
+    "build:mac": "electron-builder --mac",
+    "build:win": "electron-builder --win",
     "build:linux": "electron-builder --linux"
   },
   "build": {
@@ -25,19 +25,43 @@
       {
         "from": "assets/data",
         "to": "data",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "artifactName": "${productName}-${arch}.${ext}",
     "mac": {
       "category": "public.app-category.graphics-design",
-      "target": [{ "target": "dmg", "arch": ["arm64", "x64"] }]
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ]
     },
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }]
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
     },
     "linux": {
-      "target": [{ "target": "AppImage", "arch": ["x64"] }]
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
     },
     "publish": {
       "provider": "github",
@@ -46,7 +70,8 @@
     }
   },
   "dependencies": {
-    "electron-updater": "^6.3.0"
+    "electron-updater": "^6.3.0",
+    "jszip": "^3.10.1"
   },
   "devDependencies": {
     "electron": "^34.0.0",

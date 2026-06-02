@@ -22,9 +22,11 @@ const Inpaint = (() => {
     undoStack:        [],
     running:          false,
     initialized:      false,
-    pendingCrop:      null,  // bbox for only_masked recomposite
-    pendingWhole:     false, // flag for whole-picture recomposite
+    pendingCrop:      null,  // kept for compat but unused with Forge
+    pendingWhole:     false, // kept for compat but unused with Forge
     originalMetadata: null,  // raw JSON metadata from the source image
+    forgeOnline:      false,
+    _abort:           null,  // AbortController for in-flight Forge request
   };
 
   // ── PNG tEXt chunk injector ───────────────────────────────────────────────
@@ -108,16 +110,269 @@ const Inpaint = (() => {
 
   const PRESET_KEY = 'swi-inpaint-presets';
 
+  // ── Inpaint instances ──────────────────────────────────────────────────────
+  const _instStates = [{}]; // one state object per instance
+
+  function serializeCanvas() {
+    if (!S.maskCanvas || !S.image) return { imageData: null, maskData: null };
+    // Full-res image
+    const imgC = document.createElement('canvas');
+    imgC.width = S.image.width; imgC.height = S.image.height;
+    imgC.getContext('2d').drawImage(S.image, 0, 0);
+    // Full-res mask (black bg, white = painted)
+    const mskC = document.createElement('canvas');
+    mskC.width = S.image.width; mskC.height = S.image.height;
+    const mCtx = mskC.getContext('2d');
+    mCtx.fillStyle = 'black';
+    mCtx.fillRect(0, 0, mskC.width, mskC.height);
+    mCtx.drawImage(S.maskCanvas, 0, 0, mskC.width, mskC.height);
+    return {
+      imageData: imgC.toDataURL('image/jpeg', 0.92), // JPEG to save memory
+      maskData:  mskC.toDataURL('image/png'),
+    };
+  }
+
+  function restoreCanvas(imageData, maskData) {
+    if (!imageData) {
+      // No image → show drop zone, clear canvas state
+      S.image = null; S.imageData = null; S.maskCanvas = null; S.maskCtx = null;
+      q('inp-stack').style.display  = 'none';
+      q('inp-drop-zone').style.display = '';
+      q('inp-c-img').width = q('inp-c-mask').width = q('inp-c-cur').width = 0;
+      return;
+    }
+    const img = new Image();
+    img.onload = () => {
+      S.image = img; S.imageData = imageData;
+      setupCanvas(img);
+      if (maskData) {
+        const mImg = new Image();
+        mImg.onload = () => {
+          if (!S.maskCtx) return;
+          // Scale the stored mask back to canvas dimensions
+          S.maskCtx.clearRect(0, 0, S.maskCanvas.width, S.maskCanvas.height);
+          // Only draw white (painted) pixels from the mask
+          const tmpC = document.createElement('canvas');
+          tmpC.width  = S.maskCanvas.width;
+          tmpC.height = S.maskCanvas.height;
+          const tmpCtx = tmpC.getContext('2d');
+          tmpCtx.drawImage(mImg, 0, 0, tmpC.width, tmpC.height);
+          // Extract alpha from white pixels
+          const id  = tmpCtx.getImageData(0, 0, tmpC.width, tmpC.height);
+          const out = S.maskCtx.createImageData(tmpC.width, tmpC.height);
+          for (let i = 0; i < id.data.length; i += 4) {
+            const lum = id.data[i]; // R channel (white = 255, black = 0)
+            out.data[i]     = 255;
+            out.data[i + 1] = 255;
+            out.data[i + 2] = 255;
+            out.data[i + 3] = lum; // alpha = brightness
+          }
+          S.maskCtx.putImageData(out, 0, 0);
+          syncMaskDisplay();
+        };
+        mImg.src = maskData;
+      }
+    };
+    img.src = imageData;
+  }
+
+  function collectInpaintState() {
+    const canvas = serializeCanvas();
+    return {
+      ...collectSettings(),
+      imageData: canvas.imageData,
+      maskData:  canvas.maskData,
+    };
+  }
+
+  function applyInpaintState(state) {
+    const s = state || {};
+    applySettings(s);
+    restoreCanvas(s.imageData ?? null, s.maskData ?? null);
+  }
+
+  // ── Forge connection ───────────────────────────────────────────────────────
+  function getForgeUrl() {
+    return (q('inp-forge-url')?.value.trim() || localStorage.getItem('forge-url') || 'http://192.168.8.67:58190').replace(/\/$/, '');
+  }
+
+  function setForgeIndicator(online) {
+    const el = q('inp-forge-indicator');
+    if (!el) return;
+    el.textContent = online ? '● Online' : '● Offline';
+    el.style.color  = online ? 'var(--green)' : 'var(--red)';
+  }
+
+  function showOffline() {
+    const el = q('inp-forge-offline');
+    if (el) el.style.display = '';
+  }
+  function hideOffline() {
+    const el = q('inp-forge-offline');
+    if (el) el.style.display = 'none';
+  }
+
+  // ── Forge LoRAs ────────────────────────────────────────────────────────────
+  let _forgeLoras = []; // [{name, alias}]
+
+  async function loadForgeLoras() {
+    try {
+      const d = await fetch(`${getForgeUrl()}/sdapi/v1/loras`).then(r => r.json());
+      _forgeLoras = Array.isArray(d) ? d : [];
+      // Refresh any open LoRA selects
+      q('inp-lora-list')?.querySelectorAll('.inp-lora-sel').forEach(sel => {
+        const cur = sel.value;
+        sel.innerHTML = loraOptions();
+        if (cur) sel.value = cur;
+      });
+    } catch { _forgeLoras = []; }
+  }
+
+  function loraOptions() {
+    return '<option value="">— Select LoRA —</option>' +
+      _forgeLoras.map(l =>
+        `<option value="${esc(l.name)}">${esc(l.alias || l.name)}</option>`
+      ).join('');
+  }
+
+  function addInpLora(name = '', weight = 0.8) {
+    const list = q('inp-lora-list');
+    const row  = document.createElement('div');
+    row.className = 'inp-lora-row';
+    row.innerHTML = `
+      <select class="inp-sel inp-lora-sel" style="flex:1;min-width:0;font-size:11px">${loraOptions()}</select>
+      <input type="number" class="inp-field inp-lora-weight" value="${weight}"
+             min="0" max="2" step="0.05" style="width:52px;text-align:center;font-size:11px" title="Weight">
+      <button class="inp-btn-sm inp-btn-danger inp-lora-del" style="padding:2px 6px" title="Remove">✕</button>`;
+    list.appendChild(row);
+    if (name) row.querySelector('.inp-lora-sel').value = name;
+    row.querySelector('.inp-lora-del').addEventListener('click', () => {
+      row.remove();
+      updateInpLoraCount();
+    });
+    updateInpLoraCount();
+  }
+
+  function updateInpLoraCount() {
+    const n  = q('inp-lora-list')?.querySelectorAll('.inp-lora-row').length ?? 0;
+    const el = q('inp-lora-count');
+    if (el) el.textContent = n ? `(${n})` : '';
+    const list = q('inp-lora-list');
+    if (list) list.style.display = n ? '' : 'none';
+    if (q('inp-lora-arrow')) q('inp-lora-arrow').textContent = n ? '▼' : '▶';
+  }
+
+  function collectInpLoras() {
+    return [...(q('inp-lora-list')?.querySelectorAll('.inp-lora-row') || [])].map(row => ({
+      name:   row.querySelector('.inp-lora-sel').value,
+      weight: +row.querySelector('.inp-lora-weight').value || 0.8,
+    })).filter(l => l.name);
+  }
+
+  function buildPromptWithLoras(prompt) {
+    const loras = collectInpLoras();
+    if (!loras.length) return prompt;
+    const tags = loras.map(l => `<lora:${l.name}:${l.weight}>`).join(' ');
+    return prompt ? `${prompt} ${tags}` : tags;
+  }
+
+  async function loadForgeModels() {
+    const d = await fetch(`${getForgeUrl()}/sdapi/v1/sd-models`).then(r => {
+      if (!r.ok) throw new Error(`Forge /sd-models: ${r.status}`);
+      return r.json();
+    });
+    const sel = q('inp-sel-model');
+    if (!sel || !d?.length) return;
+    const saved = localStorage.getItem('forge-inp-model');
+    sel.innerHTML = d.map(m =>
+      `<option value="${esc(m.title)}"${m.title === saved ? ' selected' : ''}>${esc(m.title)}</option>`
+    ).join('');
+    if (saved && [...sel.options].some(o => o.value === saved)) sel.value = saved;
+  }
+
+  async function loadForgeSamplers() {
+    const d = await fetch(`${getForgeUrl()}/sdapi/v1/samplers`).then(r => {
+      if (!r.ok) throw new Error(`Forge /samplers: ${r.status}`);
+      return r.json();
+    });
+    const sel = q('inp-sampler');
+    if (!sel || !d?.length) return;
+    const saved = localStorage.getItem('forge-inp-sampler') || 'DPM++ 2M';
+    sel.innerHTML = d.map(s =>
+      `<option value="${esc(s.name)}"${s.name === saved ? ' selected' : ''}>${esc(s.name)}</option>`
+    ).join('');
+    if (saved) sel.value = saved;
+  }
+
+  async function loadForgeSchedulers() {
+    const FALLBACK = ['Automatic','Karras','Exponential','Polyexponential','SGM Uniform','KL Optimal','Normal','Simple'];
+    const sel = q('inp-scheduler');
+    if (!sel) return;
+    const saved = localStorage.getItem('forge-inp-scheduler') || 'Karras';
+    let names = FALLBACK;
+    try {
+      const d = await fetch(`${getForgeUrl()}/sdapi/v1/schedulers`).then(r => {
+        if (!r.ok) throw new Error('no schedulers');
+        return r.json();
+      });
+      if (d?.length) names = d.map(s => s.name || s.label || s);
+    } catch { /* use fallback */ }
+    sel.innerHTML = names.map(n =>
+      `<option value="${esc(n)}"${n === saved ? ' selected' : ''}>${esc(n)}</option>`
+    ).join('');
+    if (saved) sel.value = saved;
+  }
+
+  async function connectForge() {
+    setStatus('Connecting to Forge…');
+    setForgeIndicator(false);
+    try {
+      await loadForgeModels();
+      await loadForgeSamplers();
+      await loadForgeSchedulers();
+      await loadForgeLoras();
+      S.forgeOnline = true;
+      setForgeIndicator(true);
+      hideOffline();
+      setStatus('');
+    } catch (e) {
+      S.forgeOnline = false;
+      setForgeIndicator(false);
+      showOffline();
+      setStatus('');
+      const hint = e.message.includes('404')
+        ? 'Forge tourne mais API désactivée — ajoutez --api au lancement'
+        : e.message.includes('Failed to fetch') || e.message.includes('NetworkError')
+          ? 'Forge inaccessible — vérifiez que Forge est démarré (pc forge)'
+          : e.message;
+      console.warn('[Inpaint] Forge:', hint);
+      // Show hint in the offline notice
+      const noticeEl = q('inp-forge-offline')?.querySelector('.inp-forge-hint');
+      if (noticeEl) noticeEl.textContent = hint;
+    }
+  }
+
   // ── Init ───────────────────────────────────────────────────────────────────
   function init() {
     if (S.initialized) return;
     S.initialized = true;
+    // Restore saved Forge URL into input before binding
+    const savedUrl = localStorage.getItem('forge-url');
+    if (savedUrl && q('inp-forge-url')) q('inp-forge-url').value = savedUrl;
     bindUI();
     renderPresetList();
-    // Collapsible sections
+
+    // Instance bar
+    createInstanceBar(q('inp-inst-bar'), {
+      onSave:   (idx) => { _instStates[idx] = collectInpaintState(); },
+      onLoad:   (idx) => { applyInpaintState(_instStates[idx]); },
+      onNew:    (idx) => { _instStates[idx] = {}; },
+      onRemove: (idx) => { _instStates.splice(idx, 1); },
+    });
+
     document.querySelectorAll('#inp-sidebar .inp-sec-hdr').forEach(hdr => {
       hdr.addEventListener('click', e => {
-        if (e.target.closest('button')) return; // don't collapse when clicking Sync btn
+        if (e.target.closest('button')) return;
         const body = hdr.nextElementSibling;
         if (!body || !body.classList.contains('inp-sec-body')) return;
         hdr.classList.toggle('collapsed');
@@ -128,48 +383,8 @@ const Inpaint = (() => {
 
   // Called each time the tab becomes active
   function onShow() {
-    syncModels();
-    syncSamplers();
-    syncSchedulers();
-  }
-
-  // Mirror models from main selector
-  function syncModels() {
-    const src = q('sel-model');
-    const dst = q('inp-sel-model');
-    if (!src || !dst) return;
-    if (src.options.length <= 1) return; // not loaded yet
-    const prev = dst.value;
-    dst.innerHTML = src.innerHTML;
-    const saved = localStorage.getItem('swarm-inp-model');
-    dst.value = saved || src.value || '';
-    if (dst.value !== prev && prev) dst.value = prev;
-  }
-
-  // Mirror sampler from main selector
-  function syncSamplers() {
-    const src = q('sel-sampler');
-    const dst = q('inp-sampler');
-    if (!src || !dst) return;
-    if (src.options.length === 0) return;
-    const prev = dst.value;
-    dst.innerHTML = src.innerHTML;
-    const saved = localStorage.getItem('swarm-inp-sampler');
-    dst.value = saved || src.value || '';
-    if (dst.value !== prev && prev) dst.value = prev;
-  }
-
-  // Mirror scheduler from main selector
-  function syncSchedulers() {
-    const src = q('sel-scheduler');
-    const dst = q('inp-scheduler');
-    if (!src || !dst) return;
-    if (src.options.length === 0) return;
-    const prev = dst.value;
-    dst.innerHTML = src.innerHTML;
-    const saved = localStorage.getItem('swarm-inp-scheduler');
-    dst.value = saved || src.value || '';
-    if (dst.value !== prev && prev) dst.value = prev;
+    if (!S.initialized) init();
+    connectForge();
   }
 
   // ── Bind UI ────────────────────────────────────────────────────────────────
@@ -225,11 +440,17 @@ const Inpaint = (() => {
     ctr.onmouseleave = () => { S.drawing = false; clearCursor(); };
 
     // Sliders
-    bindSlider('inp-denoise',    'inp-denoise-val',    2);
-    bindSlider('inp-mblur',      'inp-mblur-val',      0);
-    bindSlider('inp-pad',        'inp-pad-val',        0);
-    bindSlider('inpp-steps',     'inpp-steps-val',     0);
-    bindSlider('inpp-cfg',       'inpp-cfg-val',       1);
+    bindSlider('inp-denoise',       'inp-denoise-val',       2);
+    bindSlider('inp-mblur',         'inp-mblur-val',         0);
+    bindSlider('inp-pad',           'inp-pad-val',           0);
+    bindSlider('inpp-steps',        'inpp-steps-val',        0);
+    bindSlider('inpp-cfg',          'inpp-cfg-val',          1);
+    bindSlider('inp-soft-bias',        'inp-soft-bias-val',        1);
+    bindSlider('inp-soft-str',         'inp-soft-str-val',         2);
+    bindSlider('inp-soft-contrast',    'inp-soft-contrast-val',    1);
+    bindSlider('inp-soft-maskinf',     'inp-soft-maskinf-val',     2);
+    bindSlider('inp-soft-diffthresh',  'inp-soft-diffthresh-val',  2);
+    bindSlider('inp-soft-diffcontrast','inp-soft-diffcontrast-val',1);
 
     // Size ratio buttons
     document.querySelectorAll('.inp-rbtn[data-w]').forEach(btn => {
@@ -264,10 +485,40 @@ const Inpaint = (() => {
 
     // Sync prompts from main tab
 
-    // Save model/sampler selection
-    q('inp-sel-model').onchange = () => localStorage.setItem('swarm-inp-model',   q('inp-sel-model').value);
-    q('inp-sampler').onchange    = () => localStorage.setItem('swarm-inp-sampler',    q('inp-sampler').value);
-    q('inp-scheduler').onchange  = () => localStorage.setItem('swarm-inp-scheduler', q('inp-scheduler').value);
+    // Save model/sampler selection (Forge-specific keys)
+    q('inp-sel-model').onchange = () => localStorage.setItem('forge-inp-model',     q('inp-sel-model').value);
+    q('inp-sampler').onchange   = () => localStorage.setItem('forge-inp-sampler',   q('inp-sampler').value);
+    q('inp-scheduler').onchange = () => localStorage.setItem('forge-inp-scheduler', q('inp-scheduler').value);
+
+    // LoRA section toggle + add
+    q('inp-lora-toggle')?.addEventListener('click', e => {
+      if (e.target.closest('#inp-lora-add')) return; // handled separately
+      const list  = q('inp-lora-list');
+      const arrow = q('inp-lora-arrow');
+      if (!list) return;
+      const open = list.style.display === 'none' || list.style.display === '';
+      // Only toggle if there are rows (otherwise "add" opens it)
+      if (q('inp-lora-list').querySelectorAll('.inp-lora-row').length) {
+        list.style.display = list.style.display === 'none' ? '' : 'none';
+        if (arrow) arrow.textContent = list.style.display === 'none' ? '▶' : '▼';
+      }
+    });
+    q('inp-lora-add')?.addEventListener('click', e => {
+      e.stopPropagation();
+      addInpLora();
+    });
+
+    // Forge URL persistence + reconnect
+    q('inp-forge-url')?.addEventListener('change', () => {
+      localStorage.setItem('forge-url', q('inp-forge-url').value.trim());
+    });
+    q('inp-forge-reconnect')?.addEventListener('click', connectForge);
+
+    // Soft Inpainting — show/hide sub-params
+    q('inpp-soft')?.addEventListener('change', () => {
+      const panel = q('inpp-soft-params');
+      if (panel) panel.style.display = q('inpp-soft').checked ? '' : 'none';
+    });
 
     // Generate
     q('inp-gen-btn').onclick = generate;
@@ -280,6 +531,16 @@ const Inpaint = (() => {
       const src = ctxMenu?._src;
       ctxMenu?.classList.remove('open');
       if (src) loadFromSrc(src);
+    };
+    q('inp-ctx-watermark').onclick = () => {
+      const src = ctxMenu?._src;
+      ctxMenu?.classList.remove('open');
+      if (src) sendToWatermark(src);
+    };
+    q('inp-ctx-img2vid').onclick = () => {
+      const src = ctxMenu?._src;
+      ctxMenu?.classList.remove('open');
+      if (src) sendToImg2Vid(src);
     };
     q('inp-ctx-dl').onclick = async () => {
       const src = ctxMenu?._src;
@@ -704,21 +965,29 @@ const Inpaint = (() => {
 
   function collectSettings() {
     return {
-      model:   q('inp-sel-model').value,
-      prompt:  q('inp-prompt').value,
-      neg:     q('inp-neg').value,
-      denoise: q('inp-denoise').value,
-      mblur:   q('inp-mblur').value,
-      mmode:   getRadio('inp-mmode'),
-      area:    getRadio('inp-area'),
-      pad:     q('inp-pad').value,
-      sampler:    q('inp-sampler').value,
-      scheduler:  q('inp-scheduler').value,
-      steps:    q('inpp-steps').value,
-      cfg:      q('inpp-cfg').value,
-      soft:     q('inpp-soft').checked,
-      w:        q('inp-w').value,
-      h:       q('inp-h').value,
+      model:        q('inp-sel-model').value,
+      prompt:       q('inp-prompt').value,
+      neg:          q('inp-neg').value,
+      denoise:      q('inp-denoise').value,
+      mblur:        q('inp-mblur').value,
+      mmode:        getRadio('inp-mmode'),
+      area:         getRadio('inp-area'),
+      pad:          q('inp-pad').value,
+      fillMode:     q('inp-fill-mode')?.value   ?? '1',
+      sampler:      q('inp-sampler').value,
+      scheduler:    q('inp-scheduler').value,
+      steps:        q('inpp-steps').value,
+      cfg:          q('inpp-cfg').value,
+      soft:         q('inpp-soft').checked,
+      softBias:        q('inp-soft-bias')?.value          ?? '1',
+      softStr:         q('inp-soft-str')?.value           ?? '0.5',
+      softContrast:    q('inp-soft-contrast')?.value      ?? '4',
+      softMaskInf:     q('inp-soft-maskinf')?.value        ?? '0',
+      softDiffThresh:  q('inp-soft-diffthresh')?.value     ?? '0.5',
+      softDiffContrast:q('inp-soft-diffcontrast')?.value   ?? '2',
+      w:            q('inp-w').value,
+      h:            q('inp-h').value,
+      loras:        collectInpLoras(),
     };
   }
 
@@ -736,13 +1005,30 @@ const Inpaint = (() => {
     setSl('inp-pad',     'inp-pad-val',     p.pad,     0);
     setSl('inpp-steps',     'inpp-steps-val',     p.steps,    0);
     setSl('inpp-cfg',       'inpp-cfg-val',       p.cfg,      1);
-    if (p.soft !== undefined) q('inpp-soft').checked = p.soft;
-    if (p.mmode)   { const el = document.querySelector(`input[name="inp-mmode"][value="${p.mmode}"]`);   if (el) el.checked = true; }
-    if (p.area)    { const el = document.querySelector(`input[name="inp-area"][value="${p.area}"]`);     if (el) el.checked = true; }
-    if (p.sampler)    q('inp-sampler').value    = p.sampler;
-    if (p.scheduler)  q('inp-scheduler').value  = p.scheduler;
-    if (p.w)       q('inp-w').value = p.w;
-    if (p.h)       q('inp-h').value = p.h;
+    if (p.soft !== undefined) {
+      q('inpp-soft').checked = p.soft;
+      const panel = q('inpp-soft-params');
+      if (panel) panel.style.display = p.soft ? '' : 'none';
+    }
+    if (p.fillMode !== undefined && q('inp-fill-mode')) q('inp-fill-mode').value = p.fillMode;
+    if (p.softBias        !== undefined) setSl('inp-soft-bias',         'inp-soft-bias-val',         p.softBias,        1);
+    if (p.softStr         !== undefined) setSl('inp-soft-str',          'inp-soft-str-val',          p.softStr,         2);
+    if (p.softContrast    !== undefined) setSl('inp-soft-contrast',     'inp-soft-contrast-val',     p.softContrast,    1);
+    if (p.softMaskInf     !== undefined) setSl('inp-soft-maskinf',      'inp-soft-maskinf-val',      p.softMaskInf,     2);
+    if (p.softDiffThresh  !== undefined) setSl('inp-soft-diffthresh',   'inp-soft-diffthresh-val',   p.softDiffThresh,  2);
+    if (p.softDiffContrast!== undefined) setSl('inp-soft-diffcontrast', 'inp-soft-diffcontrast-val', p.softDiffContrast,1);
+    if (p.mmode)      { const el = document.querySelector(`input[name="inp-mmode"][value="${p.mmode}"]`); if (el) el.checked = true; }
+    if (p.area)       { const el = document.querySelector(`input[name="inp-area"][value="${p.area}"]`);   if (el) el.checked = true; }
+    if (p.sampler)    q('inp-sampler').value   = p.sampler;
+    if (p.scheduler)  q('inp-scheduler').value = p.scheduler;
+    if (p.w)          q('inp-w').value = p.w;
+    if (p.h)          q('inp-h').value = p.h;
+    // LoRAs
+    if (p.loras !== undefined) {
+      q('inp-lora-list').innerHTML = '';
+      (p.loras || []).forEach(l => addInpLora(l.name, l.weight));
+      updateInpLoraCount();
+    }
   }
 
   function renderPresetList() {
@@ -786,134 +1072,162 @@ const Inpaint = (() => {
   function getRadio(name)   { return document.querySelector(`input[name="${name}"]:checked`)?.value; }
 
   async function generate() {
-    if (!S.image)                 { setStatus('⚠ Load an image first'); return; }
-    if (!q('inp-sel-model').value){ setStatus('⚠ Select a model'); return; }
-    if (S.running) return;
+    if (!S.image)        { setStatus('⚠ Load an image first'); return; }
+    if (!S.forgeOnline)  { setStatus('⚠ Forge is offline — click ↺ to reconnect'); return; }
+    if (S.running)       return;
 
     S.running = true;
     const btn = q('inp-gen-btn');
-    btn.textContent   = 'Stop';
+    btn.textContent      = '⏹ Stop';
     btn.style.background = 'var(--red)';
-    // Add separator between generations (history)
+
+    // History separator
     const results = q('inp-results');
     if (results.children.length > 0) {
       const sep = document.createElement('div');
-      sep.className = 'inp-hist-sep';
+      sep.className   = 'inp-hist-sep';
       sep.textContent = new Date().toLocaleTimeString();
       results.prepend(sep);
     }
+
     setProgress(0);
-    setStatus('Connecting…');
+    setStatus('Preparing…');
+
+    const forgeUrl = getForgeUrl();
+    const abort    = new AbortController();
+    S._abort = abort;
+
+    // Stop handler — interrupt Forge + abort the fetch
+    btn.onclick = () => {
+      fetch(`${forgeUrl}/sdapi/v1/interrupt`, { method: 'POST' }).catch(() => {});
+      abort.abort();
+      btn.textContent = 'Stopping…';
+      btn.disabled    = true;
+    };
+
+    let pollId = null;
 
     try {
-      const session = await API.getSession();
-      setStatus('Generating…');
-      setProgress(8);
+      // ── Export full-res image & mask ──────────────────────────────────────
+      const imgC = document.createElement('canvas');
+      imgC.width  = S.image.width;
+      imgC.height = S.image.height;
+      imgC.getContext('2d').drawImage(S.image, 0, 0);
+      const imageB64 = imgC.toDataURL('image/png');
 
-      const pad  = +q('inp-pad').value;
-      const mode = getRadio('inp-area');
+      const maskC   = document.createElement('canvas');
+      maskC.width   = S.image.width;
+      maskC.height  = S.image.height;
+      const mCtx    = maskC.getContext('2d');
+      mCtx.fillStyle = 'black';
+      mCtx.fillRect(0, 0, maskC.width, maskC.height);
+      mCtx.drawImage(S.maskCanvas, 0, 0, maskC.width, maskC.height);
+      const maskB64 = maskC.toDataURL('image/png');
+
+      const onlyMasked  = getRadio('inp-area') === 'only_masked';
+      const softEnabled = q('inpp-soft')?.checked;
+      const scheduler   = q('inp-scheduler')?.value;
 
       const payload = {
-        session_id:               session,
-        images:                   1,
-        model:                    q('inp-sel-model').value,
-        prompt:                   q('inp-prompt').value || '',
-        negativeprompt:           q('inp-neg').value    || '',
-        steps:                    +q('inpp-steps').value,
-        cfgscale:                 +q('inpp-cfg').value,
+        init_images:              [imageB64],
+        mask:                     maskB64,
+        mask_blur:                +q('inp-mblur').value,
+        inpainting_fill:          +(q('inp-fill-mode')?.value ?? 1),
+        inpaint_full_res:         onlyMasked,
+        inpaint_full_res_padding: +q('inp-pad').value,
+        inpainting_mask_invert:   getRadio('inp-mmode') === 'not_masked' ? 1 : 0,
+        prompt:                   buildPromptWithLoras(q('inp-prompt').value || ''),
+        negative_prompt:          q('inp-neg').value     || '',
         seed:                     -1,
+        steps:                    +q('inpp-steps').value,
+        cfg_scale:                +q('inpp-cfg').value,
         width:                    +q('inp-w').value,
         height:                   +q('inp-h').value,
-        sampler:                  q('inp-sampler').value   || undefined,
-        scheduler:                q('inp-scheduler').value || undefined,
-        initimagecreativity:      +q('inp-denoise').value,
-        maskblur:                 +q('inp-mblur').value,
-        initimagerecompositemask: getRadio('inp-mmode') !== 'not_masked',
-        maskbehavior:             q('inpp-soft').checked ? 'Differential' : 'Simple Latent',
+        sampler_name:             q('inp-sampler').value || 'DPM++ 2M',
+        denoising_strength:       +q('inp-denoise').value,
+        override_settings: { sd_model_checkpoint: q('inp-sel-model').value },
+        override_settings_restore_afterwards: false,
+        send_images:  true,
+        save_images:  false,
       };
+      if (scheduler) payload.scheduler = scheduler;
 
-      if (mode === 'only_masked') {
-        // Ratio-correct target size based on bbox
-        const rawBbox = getMaskBBox();
-        if (!rawBbox) {
-          setStatus('⚠ Paint a mask first');
-          S.running = false;
-          btn.textContent = 'Generate'; btn.style.background = '';
-          return;
-        }
-        const cropW = +q('inp-w').value || 1024;
-        const cropH = +q('inp-h').value || 1024;
-
-        const crop = buildOnlyMaskedPayload(cropW, cropH, pad);
-        if (!crop) {
-          setStatus('⚠ Paint a mask first');
-          S.running = false;
-          btn.textContent = 'Generate'; btn.style.background = '';
-          return;
-        }
-        payload.initimage = crop.initImage;
-        payload.maskimage = crop.maskImage;
-        payload.width     = cropW;
-        payload.height    = cropH;
-        S.pendingCrop  = crop.bbox;
-        S.pendingWhole = false;
-      } else {
-        // Whole picture: resize image + mask to the SDXL target size.
-        // We handle the recomposite ourselves (client-side) so SwarmUI just generates.
-        const tW = +q('inp-w').value;
-        const tH = +q('inp-h').value;
-
-        // Initimage: original scaled to SDXL target
-        const initC = document.createElement('canvas');
-        initC.width = tW; initC.height = tH;
-        initC.getContext('2d').drawImage(S.image, 0, 0, tW, tH);
-
-        // Maskimage: mask scaled to SDXL target (black bg, white = inpaint)
-        const maskC = document.createElement('canvas');
-        maskC.width = tW; maskC.height = tH;
-        const mCtx = maskC.getContext('2d');
-        mCtx.fillStyle = 'black';
-        mCtx.fillRect(0, 0, tW, tH);
-        mCtx.drawImage(S.maskCanvas, 0, 0, tW, tH);
-
-        payload.initimage                = initC.toDataURL('image/png');
-        payload.maskimage                = maskC.toDataURL('image/png');
-        payload.initimagerecompositemask = false; // we composite ourselves
-        S.pendingCrop  = null;
-        S.pendingWhole = true;
-        if (pad > 0) payload.maskgrow = pad;
+      if (softEnabled) {
+        payload.alwayson_scripts = {
+          'Soft Inpainting': {
+            args: [
+              true,
+              +(q('inp-soft-bias')?.value          ?? 1.0),
+              +(q('inp-soft-str')?.value           ?? 0.5),
+              +(q('inp-soft-contrast')?.value      ?? 4.0),
+              +(q('inp-soft-maskinf')?.value        ?? 0.0),
+              +(q('inp-soft-diffthresh')?.value     ?? 0.5),
+              +(q('inp-soft-diffcontrast')?.value   ?? 2.0),
+            ],
+          },
+        };
       }
 
-      await new Promise((resolve, reject) => {
-        const ws = new WebSocket(`ws://${API.host}/API/GenerateText2ImageWS`);
-        ws.onopen    = () => ws.send(JSON.stringify(payload));
-        let gotDone = false, gotImage = false;
-        ws.onmessage = async e => {
-          const msg = JSON.parse(e.data);
-          if (msg.error) { reject(new Error(msg.error)); ws.close(); return; }
-          if (msg.gen_progress) {
-            const gp = msg.gen_progress;
-            const pct = gp.overall_percent ?? gp.current_percent ?? 0;
-            setProgress(8 + pct * 88);
-            setStatus(`Generating… ${Math.round(pct * 100)}%`);
-            if (gp.preview) showLivePreview(gp.preview);
+      // ── Progress polling ──────────────────────────────────────────────────
+      pollId = setInterval(async () => {
+        try {
+          const prog = await fetch(`${forgeUrl}/sdapi/v1/progress`).then(r => r.json());
+          if (prog.progress > 0) {
+            setProgress(Math.round(prog.progress * 100));
+            setStatus(`Generating… ${Math.round(prog.progress * 100)}%`);
           }
-          if (msg.image) { gotImage = true; hideLivePreview(); await showResult(msg.image); }
-          if (msg.done === true) { gotDone = true; setProgress(100); setStatus('✅ Done'); ws.close(); resolve(); }
-        };
-        ws.onerror = () => reject(new Error('WebSocket error'));
-        ws.onclose = () => { if (!gotDone && !gotImage) reject(new Error('Generation failed — server closed unexpectedly')); else resolve(); };
+          if (prog.current_image) showLivePreview(`data:image/png;base64,${prog.current_image}`);
+        } catch { /* ignore polling errors */ }
+      }, 700);
+
+      setStatus('Sending to Forge…');
+      setProgress(2);
+
+      // ── POST to Forge ─────────────────────────────────────────────────────
+      const resp = await fetch(`${forgeUrl}/sdapi/v1/img2img`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(payload),
+        signal:  abort.signal,
       });
 
+      clearInterval(pollId); pollId = null;
+
+      if (!resp.ok) {
+        const txt = await resp.text().catch(() => `HTTP ${resp.status}`);
+        throw new Error(`Forge ${resp.status} — ${txt.slice(0, 200)}`);
+      }
+
+      const data = await resp.json();
+      hideLivePreview();
+      setProgress(100);
+      setStatus('✅ Done');
+
+      const resultB64 = data.images?.[0];
+      if (!resultB64) throw new Error('No image in Forge response');
+
+      // Forge handles compositing (inpaint_full_res) — just show the result
+      S.pendingCrop  = null;
+      S.pendingWhole = false;
+      await showResult(`data:image/png;base64,${resultB64}`);
+
     } catch (err) {
-      setStatus(`❌ ${err.message}`);
-      console.error('[Inpaint]', err);
-      if (typeof showErrorToast === 'function') showErrorToast(err.message);
+      if (pollId) { clearInterval(pollId); pollId = null; }
+      hideLivePreview();
+      if (err.name === 'AbortError') {
+        setStatus('⛔ Stopped');
+      } else {
+        setStatus(`❌ ${err.message}`);
+        console.error('[Inpaint/Forge]', err);
+      }
     }
 
-    S.running = false;
-    btn.textContent   = 'Generate';
+    S.running    = false;
+    S._abort     = null;
+    btn.disabled = false;
+    btn.textContent      = '▶ Generate';
     btn.style.background = '';
+    btn.onclick          = generate;
   }
 
   function showLivePreview(dataUrl) {

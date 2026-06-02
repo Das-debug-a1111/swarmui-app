@@ -11,18 +11,21 @@ const Scheduler = (() => {
 
   // ── State ───────────────────────────────────────────────────────────────────
   const S = {
-    models:     [],
-    cnModels:   [],
-    presets:    [],
-    tasks:      [],
-    connected:  false,
-    running:    false,
-    paused:     false,
-    stopReq:    false,
-    currentWS:  null,
-    nextId:     1,
+    models:      [],
+    cnModels:    [],
+    loraModels:  [],
+    presets:     [],
+    tasks:       [],
+    taskPresets: [],
+    connected:   false,
+    running:     false,
+    paused:      false,
+    stopReq:     false,
+    currentWS:   null,
+    nextId:      1,
     collapsedGroups: new Set(),
     galCollapsed:    new Set(),
+    galSubCollapsed: new Set(),
     initialized: false,
   };
 
@@ -76,6 +79,71 @@ const Scheduler = (() => {
     S.presets = await API.listPresets();
   }
 
+  function friendlyProcName(name) {
+    if (!name || name === 'None') return 'None (no preprocessing)';
+    return name
+      .replace(/Preprocessor$/i, '')
+      .replace(/DepthMap$/i, ' Depth')
+      .replace(/([a-z])([A-Z])/g, '$1 $2')
+      .replace(/[-_+]/g, ' ')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+  }
+
+  async function fetchCNPreprocessors() {
+    try {
+      const d = await API.listParams();
+      const params = d.list || [];
+
+      // ControlNet preprocessors — try several possible IDs
+      const param = params.find(p =>
+        p.id === 'controlnetpreprocessor' ||
+        p.id === 'controlnet_preprocessor' ||
+        p.id === 'controlnetpreprocessortype' ||
+        p.id === 'cnpreprocessor'
+      );
+      if (param?.values?.length) {
+        const sel = document.getElementById('sws-f-cn-type');
+        if (sel) {
+          const saved = localStorage.getItem('swarm-cn-preprocessor') || 'None';
+          sel.innerHTML = param.values.map(v =>
+            `<option value="${esc(v)}"${v === saved ? ' selected' : ''}>${esc(friendlyProcName(v))}</option>`
+          ).join('');
+        }
+      } else {
+        console.info('[Scheduler] available param IDs:', params.map(p => p.id).join(', '));
+      }
+
+      // Hires Fix upscale methods
+      const upParam = params.find(p => p.id === 'refinerupscalemethod');
+      if (upParam?.values?.length) {
+        const hfSel = document.getElementById('sws-f-hf-method');
+        if (hfSel) {
+          const saved = localStorage.getItem('swarm-upscale-method') || 'model-remacri_original.pth';
+          hfSel.innerHTML = upParam.values.map(v =>
+            `<option value="${esc(v)}"${v === saved ? ' selected' : ''}>${esc(friendlyUpscaleName(v))}</option>`
+          ).join('');
+        }
+      }
+    } catch(e) { console.warn('[Scheduler] params:', e); }
+  }
+
+  function friendlyUpscaleName(v) {
+    if (v.startsWith('pixel-')) return 'Pixel — ' + v.slice(6).charAt(0).toUpperCase() + v.slice(7);
+    if (v.startsWith('model-')) {
+      const file = v.slice(6).replace(/\.[^.]+$/, ''); // strip extension
+      return 'Model — ' + file;
+    }
+    return v;
+  }
+
+  async function fetchLoRAs() {
+    try {
+      const d = await API.listLoRAs();
+      S.loraModels = d.files || d.models || [];
+    } catch (e) { console.warn('[Scheduler] LoRAs:', e); }
+  }
+
   async function connect() {
     if (S.running) return;
     setStatus('Connecting…');
@@ -84,6 +152,8 @@ const Scheduler = (() => {
       setStatus('Loading models…');
       S.models = await fetchModels();
       await fetchCNModels();
+      await fetchLoRAs();
+      await fetchCNPreprocessors();
       await fetchPresets();
       S.connected = true;
       setStatus(`${S.models.length} models · ${S.presets.length} presets`);
@@ -103,6 +173,93 @@ const Scheduler = (() => {
     if (el) el.textContent = txt;
   }
 
+  // ── LoRA helpers ────────────────────────────────────────────────────────────
+  function addLoraRow(model = '', weight = 1) {
+    const list = document.getElementById('sws-lora-list');
+    const row  = document.createElement('div');
+    row.className = 'sws-lora-row';
+    row.innerHTML = `
+      <select class="sws-sel sws-lora-sel" style="flex:1;min-width:0"></select>
+      <input type="number" class="sws-inp sws-lora-weight" value="${weight}"
+             min="0" max="2" step="0.05" style="width:60px;text-align:center" title="Weight">
+      <button class="sws-lora-del" title="Remove">✕</button>`;
+    list.appendChild(row);
+    const sel = row.querySelector('.sws-lora-sel');
+    sel.innerHTML = '<option value="">— Select LoRA —</option>' +
+      S.loraModels.map(m =>
+        `<option value="${esc(m.name)}"${m.name === model ? ' selected' : ''}>${esc(m.title || m.name)}</option>`
+      ).join('');
+    if (model) sel.value = model;
+    row.querySelector('.sws-lora-del').addEventListener('click', () => {
+      row.remove();
+      updateLoraCount();
+    });
+    updateLoraCount();
+  }
+
+  function updateLoraCount() {
+    const n  = document.getElementById('sws-lora-list').querySelectorAll('.sws-lora-row').length;
+    const el = document.getElementById('sws-lora-count');
+    if (el) el.textContent = n ? `(${n})` : '';
+  }
+
+  function collectLoras() {
+    return [...document.querySelectorAll('#sws-lora-list .sws-lora-row')].map(row => ({
+      model:  row.querySelector('.sws-lora-sel').value,
+      weight: +row.querySelector('.sws-lora-weight').value || 1,
+    })).filter(l => l.model);
+  }
+
+  function resetLoraEditor() {
+    document.getElementById('sws-lora-list').innerHTML = '';
+    updateLoraCount();
+    document.getElementById('sws-lora-body').classList.remove('open');
+    document.getElementById('sws-lora-arrow').textContent = '▶';
+  }
+
+  function loadLorasIntoEditor(loras = []) {
+    document.getElementById('sws-lora-list').innerHTML = '';
+    loras.forEach(l => addLoraRow(l.model, l.weight));
+    const hasLoras = loras.length > 0;
+    document.getElementById('sws-lora-body').classList.toggle('open', hasLoras);
+    document.getElementById('sws-lora-arrow').textContent = hasLoras ? '▼' : '▶';
+  }
+
+  // ── Batch download ──────────────────────────────────────────────────────────
+  async function downloadImgs(imgEls, label) {
+    const imgs = [...imgEls];
+    if (!imgs.length) { toast('No images to download', 'warning'); return; }
+    toast(`Preparing ZIP — ${imgs.length} image${imgs.length > 1 ? 's' : ''}…`, 'info');
+    const zip = new JSZip();
+    let n = 0;
+    for (const img of imgs) {
+      try {
+        const res  = await fetch(img.src);
+        const blob = await res.blob();
+        const ext  = blob.type.includes('png') ? 'png' : 'jpg';
+        zip.file(`${String(++n).padStart(4, '0')}.${ext}`, blob);
+      } catch (e) { console.warn('[DL]', img.src, e); }
+    }
+    if (n === 0) { toast('No images could be fetched', 'error'); return; }
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = (label || 'images').replace(/[^a-z0-9_\-]/gi, '_') + '.zip';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    toast(`${n} image${n > 1 ? 's' : ''} téléchargées`, 'success');
+  }
+
+  function addGroupDlBtn(hdr, getImgs, label) {
+    const btn = document.createElement('button');
+    btn.className = 'sws-gal-dl-btn';
+    btn.title     = 'Télécharger en ZIP';
+    btn.textContent = '⬇';
+    btn.addEventListener('click', e => { e.stopPropagation(); downloadImgs(getImgs(), label); });
+    hdr.appendChild(btn);
+  }
+
   function populateModels() {
     const opts = S.models.length
       ? '<option value="">— Select Model —</option>' +
@@ -117,6 +274,92 @@ const Scheduler = (() => {
         S.models.map(m => `<option value="${esc(m.value)}">${esc(m.label)}</option>`).join('');
       if (cur) hfSel.value = cur;
     }
+  }
+
+  // ── Task Presets ───────────────────────────────────────────────────────────
+  function loadTaskPresetsStorage() {
+    try {
+      const raw = localStorage.getItem('sws_task_presets');
+      S.taskPresets = raw ? JSON.parse(raw) : [];
+    } catch { S.taskPresets = []; }
+  }
+
+  function saveTaskPresetsStorage() {
+    try { localStorage.setItem('sws_task_presets', JSON.stringify(S.taskPresets)); } catch {}
+  }
+
+  function openTaskPresetsModal() {
+    renderTaskPresetsList();
+    document.getElementById('sws-tp-name').value = '';
+    document.getElementById('sws-tp-modal').classList.add('open');
+    setTimeout(() => document.getElementById('sws-tp-name').focus(), 50);
+  }
+
+  function closeTaskPresetsModal() {
+    document.getElementById('sws-tp-modal').classList.remove('open');
+  }
+
+  function renderTaskPresetsList() {
+    const list = document.getElementById('sws-tp-list');
+    if (!S.taskPresets.length) {
+      list.innerHTML = '<div class="sws-preset-empty">No saved task presets yet.</div>';
+      return;
+    }
+    list.innerHTML = S.taskPresets.map(p => {
+      const date   = new Date(p.createdAt).toLocaleDateString();
+      const gNames = p.groups.length ? p.groups.map(g => esc(g)).join(', ') : '';
+      return `
+        <div class="sws-tp-item">
+          <div class="sws-tp-item-info">
+            <div class="sws-preset-title">${esc(p.name)}</div>
+            <div class="sws-preset-meta">${p.taskCount} task${p.taskCount > 1 ? 's' : ''} · ${p.groups.length} groupe${p.groups.length !== 1 ? 's' : ''} · ${date}</div>
+            ${gNames ? `<div class="sws-preset-desc">📁 ${gNames}</div>` : ''}
+          </div>
+          <div class="sws-tp-item-actions">
+            <button class="sws-btn primary" onclick="Scheduler._loadTaskPreset(${p.id})">Load</button>
+            <button class="sws-btn danger sm" onclick="Scheduler._deleteTaskPreset(${p.id})">✕</button>
+          </div>
+        </div>`;
+    }).join('');
+  }
+
+  function saveCurrentAsTaskPreset() {
+    const name = document.getElementById('sws-tp-name').value.trim();
+    if (!name) { toast('Donne un nom au preset', 'error'); return; }
+    if (!S.tasks.length) { toast('Aucune tâche à sauvegarder', 'error'); return; }
+    const groups = [...new Set(S.tasks.map(t => t.group).filter(Boolean))];
+    const preset = {
+      id:        Date.now(),
+      name,
+      createdAt: Date.now(),
+      groups,
+      taskCount: S.tasks.length,
+      tasks:     JSON.parse(JSON.stringify(S.tasks.map(t => ({...t, status: 'pending', errMsg: ''})))),
+    };
+    S.taskPresets.unshift(preset);
+    saveTaskPresetsStorage();
+    renderTaskPresetsList();
+    document.getElementById('sws-tp-name').value = '';
+    toast(`Preset "${name}" sauvegardé !`, 'success');
+  }
+
+  function loadTaskPreset(id) {
+    const preset = S.taskPresets.find(p => p.id === id);
+    if (!preset) return;
+    if (S.tasks.length && !confirm(`Charger "${preset.name}" ? La queue actuelle sera remplacée.`)) return;
+    S.nextId = 1;
+    S.tasks  = preset.tasks.map(t => makeTask(t));
+    save(); render(); closeTaskPresetsModal();
+    toast(`"${preset.name}" chargé — ${preset.taskCount} tâches`, 'success');
+  }
+
+  function deleteTaskPreset(id) {
+    const preset = S.taskPresets.find(p => p.id === id);
+    if (!preset || !confirm(`Supprimer le preset "${preset.name}" ?`)) return;
+    S.taskPresets = S.taskPresets.filter(p => p.id !== id);
+    saveTaskPresetsStorage();
+    renderTaskPresetsList();
+    toast('Preset supprimé', 'info');
   }
 
   // ── Preset picker ──────────────────────────────────────────────────────────
@@ -199,7 +442,7 @@ const Scheduler = (() => {
     populateModels();
     if (pm.model) document.getElementById('sws-f-model').value = pm.model;
 
-    document.getElementById('sws-modal').classList.add('open');
+    document.getElementById('sws-right').classList.add('editing');
     setTimeout(() => document.getElementById('sws-f-name').focus(), 50);
     toast(`Preset "${p.title}" loaded`, 'info');
   }
@@ -225,12 +468,17 @@ const Scheduler = (() => {
           seed:           task.seed ?? -1,
         };
         if (task.sampler) payload.sampler = task.sampler;
+        const activeLoras = (task.loras || []).filter(l => l.model);
+        if (activeLoras.length) {
+          payload.loras       = activeLoras.map(l => l.model).join(',');
+          payload.loraweights = activeLoras.map(l => l.weight ?? 1).join(',');
+        }
         const cn = task.controlnet;
         if (cn && cn.enabled && cn.image) {
-          payload.controlnetimage     = cn.image;
+          payload.controlnetimageinput = cn.image;
           payload.controlnetstrength  = cn.strength ?? 1;
-          payload.controlnetstartpct  = cn.start    ?? 0;
-          payload.controlnetendpct    = cn.end      ?? 1;
+          payload.controlnetstart     = cn.start    ?? 0;
+          payload.controlnetend       = cn.end      ?? 1;
           if (cn.model)               payload.controlnetmodel = cn.model;
           if (cn.type && cn.type !== 'none') payload.controlnetpreprocessor = cn.type;
         }
@@ -294,6 +542,11 @@ const Scheduler = (() => {
 
     S.running = true; S.paused = false; S.stopReq = false;
     updateButtons();
+
+    // Clear gallery at the start of each run
+    document.getElementById('sws-gallery').innerHTML = '<div class="sws-gal-empty">Images will appear here</div>';
+    S.galCollapsed.clear();
+    S.galSubCollapsed.clear();
 
     let done = 0;
     const total = pending.length;
@@ -398,62 +651,158 @@ const Scheduler = (() => {
     const empty = gallery.querySelector('.sws-gal-empty');
     if (empty) empty.remove();
 
-    const groupKey = group || '';
-    const sectionId = 'sws-gal-sect-' + groupKey.replace(/\W+/g, '_');
-    let sect = document.getElementById(sectionId);
-    if (!sect) {
-      sect = document.createElement('div');
-      sect.className = 'sws-gal-sect';
-      sect.id = sectionId;
+    const gKey = (group || '').replace(/\W+/g, '_');
+    const nKey = (name  || 'Unnamed').replace(/\W+/g, '_');
 
-      const hdr = document.createElement('div');
-      hdr.className = 'sws-gal-sect-hdr';
-      hdr.dataset.group = groupKey;
-      hdr.addEventListener('click', () => toggleGalGroup(groupKey, hdr));
+    let grid;
 
-      const grid = document.createElement('div');
-      grid.className = 'sws-gal-sect-grid';
+    if (group) {
+      // ── Top-level group ───────────────────────────────────────────────────
+      const grpId = 'sws-gal-grp-' + gKey;
+      let grp = document.getElementById(grpId);
+      if (!grp) {
+        grp = document.createElement('div');
+        grp.className = 'sws-gal-group';
+        grp.id = grpId;
 
-      sect.appendChild(hdr);
-      sect.appendChild(grid);
-      gallery.insertBefore(sect, gallery.firstChild);
+        const ghdr = document.createElement('div');
+        ghdr.className = 'sws-gal-group-hdr';
+        ghdr.addEventListener('click', () => toggleGalTopGroup(group, ghdr));
+
+        const gbody = document.createElement('div');
+        gbody.className = 'sws-gal-group-body';
+
+        grp.appendChild(ghdr);
+        grp.appendChild(gbody);
+        gallery.insertBefore(grp, gallery.firstChild);
+      }
+
+      const gbody = grp.querySelector('.sws-gal-group-body');
+      const ghdr  = grp.querySelector('.sws-gal-group-hdr');
+
+      // ── Sub-section (task name) ───────────────────────────────────────────
+      const sectId = 'sws-gal-sect-' + gKey + '-' + nKey;
+      let sect = document.getElementById(sectId);
+      if (!sect) {
+        sect = document.createElement('div');
+        sect.className = 'sws-gal-sect';
+        sect.id = sectId;
+
+        const shdr = document.createElement('div');
+        shdr.className = 'sws-gal-sect-hdr';
+        const subKey = group + ':' + name;
+        shdr.addEventListener('click', () => toggleGalSubGroup(subKey, shdr));
+
+        const sgrid = document.createElement('div');
+        sgrid.className = 'sws-gal-sect-grid';
+
+        sect.appendChild(shdr);
+        sect.appendChild(sgrid);
+        gbody.insertBefore(sect, gbody.firstChild);
+      }
+
+      grid = sect.querySelector('.sws-gal-sect-grid');
+      const shdr = sect.querySelector('.sws-gal-sect-hdr');
+
+      // Add image
+      const item = document.createElement('div');
+      item.className = 'sws-gal-item';
+      item.title = name;
+      item.onclick = () => openLightbox(src, grid);
+      item.addEventListener('contextmenu', e => { e.preventDefault(); openGalCtx(src, grid, e.clientX, e.clientY); });
+      const img = document.createElement('img');
+      img.src = src; img.alt = name; img.loading = 'lazy';
+      item.appendChild(img);
+      grid.insertBefore(item, grid.firstChild);
+
+      // Update sub-section header
+      const sCount = grid.querySelectorAll('.sws-gal-item').length;
+      const subKey = group + ':' + name;
+      const subCol = S.galSubCollapsed.has(subKey);
+      shdr.innerHTML = `<span>📷 ${esc(name)}</span><span>${sCount} img${sCount > 1 ? 's' : ''} ${subCol ? '▶' : '▼'}</span>`;
+      shdr.classList.toggle('collapsed', subCol);
+
+      // Update group header
+      const total = grp.querySelectorAll('.sws-gal-item').length;
+      const topCol = S.galCollapsed.has(group);
+      ghdr.innerHTML = `<span>📁 ${esc(group)}</span><span class="sws-ghdr-info">${total} img${total > 1 ? 's' : ''} ${topCol ? '▶' : '▼'}</span>`;
+      ghdr.classList.toggle('collapsed', topCol);
+      addGroupDlBtn(ghdr, () => grp.querySelectorAll('.sws-gal-item img'), group);
+
+    } else {
+      // ── No group — single-level section by task name ──────────────────────
+      const sectId = 'sws-gal-sect-' + nKey;
+      let sect = document.getElementById(sectId);
+      if (!sect) {
+        sect = document.createElement('div');
+        sect.className = 'sws-gal-sect';
+        sect.id = sectId;
+
+        const hdr = document.createElement('div');
+        hdr.className = 'sws-gal-sect-hdr';
+        hdr.addEventListener('click', () => toggleGalGroup(nKey, hdr));
+
+        const sgrid = document.createElement('div');
+        sgrid.className = 'sws-gal-sect-grid';
+
+        sect.appendChild(hdr);
+        sect.appendChild(sgrid);
+        gallery.insertBefore(sect, gallery.firstChild);
+      }
+
+      grid = sect.querySelector('.sws-gal-sect-grid');
+      const hdr = sect.querySelector('.sws-gal-sect-hdr');
+
+      // Add image
+      const item = document.createElement('div');
+      item.className = 'sws-gal-item';
+      item.title = name || '';
+      item.onclick = () => openLightbox(src, grid);
+      item.addEventListener('contextmenu', e => { e.preventDefault(); openGalCtx(src, grid, e.clientX, e.clientY); });
+      const img = document.createElement('img');
+      img.src = src; img.alt = name || ''; img.loading = 'lazy';
+      item.appendChild(img);
+      grid.insertBefore(item, grid.firstChild);
+
+      const count = grid.querySelectorAll('.sws-gal-item').length;
+      const col = S.galCollapsed.has(nKey);
+      hdr.innerHTML = `<span>📷 ${name ? esc(name) : 'All'}</span><span class="sws-ghdr-info">${count} img${count > 1 ? 's' : ''} ${col ? '▶' : '▼'}</span>`;
+      hdr.classList.toggle('collapsed', col);
+      addGroupDlBtn(hdr, () => grid.querySelectorAll('img'), name || 'images');
     }
-
-    const grid = sect.querySelector('.sws-gal-sect-grid');
-    const hdr  = sect.querySelector('.sws-gal-sect-hdr');
-
-    // Add image
-    const item = document.createElement('div');
-    item.className = 'sws-gal-item';
-    item.title = name;
-    item.onclick = () => openLightbox(src, grid);
-    item.addEventListener('contextmenu', e => { e.preventDefault(); openGalCtx(src, grid, e.clientX, e.clientY); });
-    const img = document.createElement('img');
-    img.src = src; img.alt = name; img.loading = 'lazy';
-    item.appendChild(img);
-    grid.insertBefore(item, grid.firstChild);
-
-    // Update header label + count
-    const count = grid.querySelectorAll('.sws-gal-item').length;
-    const collapsed = S.galCollapsed.has(groupKey);
-    hdr.innerHTML = `<span>${groupKey ? '📁 ' + groupKey : '📷 All'}</span><span style="font-weight:400">${count} img${count > 1 ? 's' : ''} ${collapsed ? '▶' : '▼'}</span>`;
-    if (collapsed) hdr.classList.add('collapsed');
   }
 
-  function toggleGalGroup(groupKey, hdr) {
-    if (S.galCollapsed.has(groupKey)) {
-      S.galCollapsed.delete(groupKey);
-      hdr.classList.remove('collapsed');
-    } else {
-      S.galCollapsed.add(groupKey);
-      hdr.classList.add('collapsed');
-    }
-    // Update arrow in header
+  function toggleGalTopGroup(group, hdr) {
+    if (S.galCollapsed.has(group)) S.galCollapsed.delete(group);
+    else S.galCollapsed.add(group);
+    const body = hdr.nextElementSibling;
+    const total = body ? body.querySelectorAll('.sws-gal-item').length : 0;
+    const col = S.galCollapsed.has(group);
+    hdr.innerHTML = `<span>📁 ${esc(group)}</span><span class="sws-ghdr-info">${total} img${total > 1 ? 's' : ''} ${col ? '▶' : '▼'}</span>`;
+    hdr.classList.toggle('collapsed', col);
+    addGroupDlBtn(hdr, () => body?.querySelectorAll('.sws-gal-item img') || [], group);
+  }
+
+  function toggleGalSubGroup(subKey, hdr) {
+    if (S.galSubCollapsed.has(subKey)) S.galSubCollapsed.delete(subKey);
+    else S.galSubCollapsed.add(subKey);
     const grid = hdr.nextElementSibling;
     const count = grid ? grid.querySelectorAll('.sws-gal-item').length : 0;
-    const collapsed = S.galCollapsed.has(groupKey);
-    hdr.innerHTML = `<span>${groupKey ? '📁 ' + groupKey : '📷 All'}</span><span style="font-weight:400">${count} img${count > 1 ? 's' : ''} ${collapsed ? '▶' : '▼'}</span>`;
-    if (collapsed) hdr.classList.add('collapsed');
+    const col = S.galSubCollapsed.has(subKey);
+    const name = subKey.split(':').slice(1).join(':');
+    hdr.innerHTML = `<span>📷 ${esc(name)}</span><span>${count} img${count > 1 ? 's' : ''} ${col ? '▶' : '▼'}</span>`;
+    hdr.classList.toggle('collapsed', col);
+  }
+
+  function toggleGalGroup(key, hdr) {
+    if (S.galCollapsed.has(key)) S.galCollapsed.delete(key);
+    else S.galCollapsed.add(key);
+    const grid = hdr.nextElementSibling;
+    const count = grid ? grid.querySelectorAll('.sws-gal-item').length : 0;
+    const col = S.galCollapsed.has(key);
+    const label = hdr.querySelector('span')?.textContent?.replace(/^📷 /, '') || 'All';
+    hdr.innerHTML = `<span>📷 ${esc(label)}</span><span>${count} img${count > 1 ? 's' : ''} ${col ? '▶' : '▼'}</span>`;
+    hdr.classList.toggle('collapsed', col);
   }
 
   // ── Lightbox with arrow navigation ──────────────────────────────────────────
@@ -463,7 +812,7 @@ const Scheduler = (() => {
   function openLightbox(src, grid) {
     if (grid) {
       // Build ordered list from the grid (items are inserted at front, so reverse to get chronological order)
-      _lbItems = [...grid.querySelectorAll('.sws-gal-item img')].map(img => img.src).reverse();
+      _lbItems = [...grid.querySelectorAll('.sws-gal-item img')].map(img => img.src);
       _lbIndex = _lbItems.indexOf(src);
       if (_lbIndex === -1) { _lbItems = [src]; _lbIndex = 0; }
     } else {
@@ -526,6 +875,7 @@ const Scheduler = (() => {
       enabled: d.enabled  !== false,
       status:  'pending',
       errMsg:  '',
+      loras:      d.loras      || [],
       controlnet: d.controlnet || { enabled: false, model: '', type: 'none', strength: 1, start: 0, end: 1, image: null },
       hiresfix:   d.hiresfix   || { enabled: false, model: '', method: 'model-remacri_original.pth', scale: 1.5, pct: 0.2, steps: 10, cfg: 7 },
     };
@@ -557,12 +907,18 @@ const Scheduler = (() => {
       document.getElementById('sws-f-cn-strength').value  = cn.strength ?? 1;
       document.getElementById('sws-f-cn-start').value     = cn.start    ?? 0;
       document.getElementById('sws-f-cn-end').value       = cn.end      ?? 1;
-      document.getElementById('sws-f-cn-imgurl').value    = cn.image ? '(image loaded)' : '';
-      document.getElementById('sws-cn-preview').src       = cn.image || '';
-      document.getElementById('sws-cn-preview').classList.toggle('show', !!cn.image);
       document.getElementById('sws-cn-body').classList.toggle('open', !!cn.enabled);
       document.getElementById('sws-cn-arrow').textContent = cn.enabled ? '▼' : '▶';
       Scheduler._cnImage = cn.image || null;
+      if (cn.image) {
+        document.getElementById('sws-cn-preview').src = cn.image;
+        document.getElementById('sws-cn-preview').classList.add('show');
+        document.getElementById('sws-cn-dropzone').classList.add('loaded');
+        document.getElementById('sws-cn-drop-label').textContent = 'Image loaded ✓';
+        document.getElementById('sws-cn-clear-btn').style.display = '';
+      } else if (Scheduler._clearCnImage) {
+        Scheduler._clearCnImage();
+      }
       const hf = t.hiresfix || {};
       document.getElementById('sws-f-hf-enabled').checked = !!hf.enabled;
       document.getElementById('sws-f-hf-model').value     = hf.model  || '';
@@ -575,6 +931,7 @@ const Scheduler = (() => {
       document.getElementById('sws-hf-arrow').textContent = hf.enabled ? '▼' : '▶';
       document.getElementById('sws-f-w').value = t.width;
       document.getElementById('sws-f-h').value = t.height;
+      loadLorasIntoEditor(t.loras || []);
     } else {
       document.getElementById('sws-f-group').value   = '';
       document.getElementById('sws-f-name').value    = `Task ${S.tasks.length + 1}`;
@@ -587,18 +944,16 @@ const Scheduler = (() => {
       document.getElementById('sws-f-count').value   = 4;
       document.getElementById('sws-f-seed').value    = -1;
       document.getElementById('sws-f-sampler').value = '';
+      resetLoraEditor();
       document.getElementById('sws-f-cn-enabled').checked = false;
       document.getElementById('sws-f-cn-model').value     = '';
       document.getElementById('sws-f-cn-type').value      = 'none';
       document.getElementById('sws-f-cn-strength').value  = 1;
       document.getElementById('sws-f-cn-start').value     = 0;
       document.getElementById('sws-f-cn-end').value       = 1;
-      document.getElementById('sws-f-cn-imgurl').value    = '';
-      document.getElementById('sws-cn-preview').src       = '';
-      document.getElementById('sws-cn-preview').classList.remove('show');
       document.getElementById('sws-cn-body').classList.remove('open');
       document.getElementById('sws-cn-arrow').textContent = '▶';
-      Scheduler._cnImage = null;
+      if (Scheduler._clearCnImage) Scheduler._clearCnImage();
       document.getElementById('sws-f-hf-enabled').checked = false;
       document.getElementById('sws-f-hf-model').value     = '';
       document.getElementById('sws-f-hf-method').value    = 'model-remacri_original.pth';
@@ -612,11 +967,108 @@ const Scheduler = (() => {
       document.getElementById('sws-f-h').value = 1024;
     }
     onRatioChange();
-    document.getElementById('sws-modal').classList.add('open');
+    document.getElementById('sws-right').classList.add('editing');
     setTimeout(() => document.getElementById('sws-f-name').focus(), 50);
   }
 
-  function closeModal() { document.getElementById('sws-modal').classList.remove('open'); }
+  function closeModal() {
+    if (_qpWS) { _qpWS.close(); _qpWS = null; }
+    resetQpBtn();
+    document.getElementById('sws-right').classList.remove('editing');
+  }
+
+  // ── Quick Preview ───────────────────────────────────────────────────────────
+  let _qpWS = null;
+
+  function resetQpBtn() {
+    const btn = document.getElementById('sws-qp-btn');
+    if (btn) { btn.disabled = false; btn.textContent = '🔍 Preview'; }
+    const bw = document.getElementById('sws-qp-bar-wrap');
+    if (bw) bw.style.display = 'none';
+  }
+
+  function quickPreview() {
+    if (!S.connected) { toast('Not connected', 'error'); return; }
+    if (_qpWS) { _qpWS.close(); _qpWS = null; }
+
+    const btn    = document.getElementById('sws-qp-btn');
+    const barWrap= document.getElementById('sws-qp-bar-wrap');
+    const bar    = document.getElementById('sws-qp-bar');
+    const status = document.getElementById('sws-qp-status');
+    const img    = document.getElementById('sws-qp-img');
+
+    const r    = document.getElementById('sws-f-ratio').value;
+    const dims = r === 'custom'
+      ? { w: +document.getElementById('sws-f-w').value || 1024, h: +document.getElementById('sws-f-h').value || 1024 }
+      : (RATIOS[r] || { w: 1024, h: 1024 });
+
+    const prompt = document.getElementById('sws-f-prompt').value.trim();
+    const model  = document.getElementById('sws-f-model').value;
+    if (!prompt) { toast('Prompt requis', 'error'); return; }
+    if (!model)  { toast('Sélectionne un modèle', 'error'); return; }
+
+    const payload = {
+      session_id:     API.session,
+      images:         1,
+      prompt,
+      negativeprompt: document.getElementById('sws-f-neg').value.trim(),
+      model,
+      steps:          +document.getElementById('sws-f-steps').value || 20,
+      cfgscale:       +document.getElementById('sws-f-cfg').value   || 7,
+      width:          dims.w,
+      height:         dims.h,
+      seed:           -1,
+    };
+
+    // ControlNet
+    const cnEnabled = document.getElementById('sws-f-cn-enabled').checked;
+    if (cnEnabled && Scheduler._cnImage) {
+      payload.controlnetimageinput = Scheduler._cnImage;
+      payload.controlnetstrength   = +document.getElementById('sws-f-cn-strength').value || 1;
+      payload.controlnetstart      = +document.getElementById('sws-f-cn-start').value    || 0;
+      payload.controlnetend        = +document.getElementById('sws-f-cn-end').value      || 1;
+      const cnModel = document.getElementById('sws-f-cn-model').value;
+      const cnType  = document.getElementById('sws-f-cn-type').value;
+      if (cnModel) payload.controlnetmodel = cnModel;
+      if (cnType && cnType !== 'none') payload.controlnetpreprocessor = cnType;
+    }
+
+    btn.disabled = true;
+    btn.textContent = '⏳ Generating…';
+    barWrap.style.display = 'block';
+    bar.style.width = '0%';
+    status.textContent = 'Starting…';
+    img.style.display = 'none';
+
+    _qpWS = new WebSocket(`${API.wsOrigin}/API/GenerateText2ImageWS`);
+    _qpWS.onopen = () => _qpWS.send(JSON.stringify(payload));
+    _qpWS.onmessage = evt => {
+      let msg; try { msg = JSON.parse(evt.data); } catch { return; }
+      if (msg.error) { status.textContent = '❌ ' + msg.error; resetQpBtn(); return; }
+      if (msg.status) {
+        const pct = msg.overall_percent ?? msg.cur_overall_percent ?? 0;
+        bar.style.width = Math.round(pct * 100) + '%';
+        status.textContent = msg.status;
+      }
+      if (msg.gen_progress) {
+        const gp = msg.gen_progress;
+        bar.style.width = Math.round((gp.overall_percent ?? gp.current_percent ?? 0) * 100) + '%';
+        if (gp.preview) { img.src = gp.preview; img.style.display = 'block'; }
+      }
+      if (msg.image) {
+        const raw = typeof msg.image === 'object' ? (msg.image.image || msg.image.url || '') : msg.image;
+        const src = raw.startsWith('http') || raw.startsWith('data:')
+          ? raw : `${API.origin}/${raw.replace(/^\//, '')}`;
+        img.src = src;
+        img.style.display = 'block';
+        bar.style.width = '100%';
+        status.textContent = '';
+      }
+      if (msg.done) { _qpWS = null; resetQpBtn(); }
+    };
+    _qpWS.onerror = () => { status.textContent = '❌ WebSocket error'; resetQpBtn(); _qpWS = null; };
+    _qpWS.onclose = () => { if (btn.disabled) resetQpBtn(); _qpWS = null; };
+  }
 
   function onRatioChange() {
     const r = document.getElementById('sws-f-ratio').value;
@@ -646,6 +1098,7 @@ const Scheduler = (() => {
       count:   +document.getElementById('sws-f-count').value || 1,
       sampler: document.getElementById('sws-f-sampler').value.trim(),
       group:   document.getElementById('sws-f-group').value.trim(),
+      loras:   collectLoras(),
       controlnet: {
         enabled:  document.getElementById('sws-f-cn-enabled').checked,
         model:    document.getElementById('sws-f-cn-model').value,
@@ -907,6 +1360,7 @@ const Scheduler = (() => {
     S.initialized = true;
 
     loadStorage();
+    loadTaskPresetsStorage();
     render();
     updateButtons();
 
@@ -923,17 +1377,42 @@ const Scheduler = (() => {
       save(); render();
       toast('Done tasks cleared', 'info');
     });
+    document.getElementById('sws-btn-task-presets').addEventListener('click', openTaskPresetsModal);
     document.getElementById('sws-btn-save').addEventListener('click', exportQueue);
     document.getElementById('sws-btn-load').addEventListener('click', () => document.getElementById('sws-file').click());
     document.getElementById('sws-file').addEventListener('change', importQueue);
     document.getElementById('sws-gal-clear').addEventListener('click', () => {
       document.getElementById('sws-gallery').innerHTML = '<div class="sws-gal-empty">Images will appear here</div>';
       S.galCollapsed.clear();
+      S.galSubCollapsed.clear();
+    });
+    document.getElementById('sws-gal-dl-all').addEventListener('click', () => {
+      const imgs = document.getElementById('sws-gallery').querySelectorAll('.sws-gal-item img');
+      downloadImgs(imgs, 'swarmapp_all');
+    });
+
+    // LoRA section toggle + add
+    document.getElementById('sws-lora-toggle').addEventListener('click', () => {
+      const body  = document.getElementById('sws-lora-body');
+      const arrow = document.getElementById('sws-lora-arrow');
+      body.classList.toggle('open');
+      arrow.textContent = body.classList.contains('open') ? '▼' : '▶';
+    });
+    document.getElementById('sws-lora-add').addEventListener('click', () => {
+      addLoraRow();
+      document.getElementById('sws-lora-body').classList.add('open');
+      document.getElementById('sws-lora-arrow').textContent = '▼';
     });
 
     // Gallery context menu
     document.getElementById('sws-ctx-inpaint').addEventListener('click', () => {
       if (_galCtxSrc) { closeGalCtx(); sendToInpaint(_galCtxSrc); }
+    });
+    document.getElementById('sws-ctx-watermark').addEventListener('click', () => {
+      if (_galCtxSrc) { closeGalCtx(); sendToWatermark(_galCtxSrc); }
+    });
+    document.getElementById('sws-ctx-img2vid').addEventListener('click', () => {
+      if (_galCtxSrc) { closeGalCtx(); sendToImg2Vid(_galCtxSrc); }
     });
     document.getElementById('sws-ctx-open').addEventListener('click', () => {
       if (_galCtxSrc) { closeGalCtx(); openLightbox(_galCtxSrc, _galCtxGrid); }
@@ -955,6 +1434,7 @@ const Scheduler = (() => {
     document.getElementById('sws-modal-close').addEventListener('click', closeModal);
     document.getElementById('sws-modal-cancel').addEventListener('click', closeModal);
     document.getElementById('sws-modal-save').addEventListener('click', saveTask);
+    document.getElementById('sws-qp-btn').addEventListener('click', quickPreview);
     document.getElementById('sws-f-ratio').addEventListener('change', onRatioChange);
 
     // ControlNet toggle
@@ -985,22 +1465,70 @@ const Scheduler = (() => {
       document.getElementById('sws-hf-arrow').textContent = checked ? '▼' : '▶';
     });
 
-    // ControlNet image
-    document.getElementById('sws-f-cn-file').addEventListener('change', e => {
+    // ControlNet image — click + drag & drop
+    const cnDrop  = document.getElementById('sws-cn-dropzone');
+    const cnFile  = document.getElementById('sws-f-cn-file');
+    const cnPrev  = document.getElementById('sws-cn-preview');
+    const cnLabel = document.getElementById('sws-cn-drop-label');
+    const cnClear = document.getElementById('sws-cn-clear-btn');
+
+    function setCnImage(dataUrl, name) {
+      Scheduler._cnImage = dataUrl;
+      cnPrev.src  = dataUrl;
+      cnPrev.classList.add('show');
+      cnDrop.classList.add('loaded');
+      cnLabel.textContent = name || 'Image loaded ✓';
+      cnClear.style.display = '';
+    }
+
+    function clearCnImage() {
+      Scheduler._cnImage = null;
+      cnPrev.src = '';
+      cnPrev.classList.remove('show');
+      cnDrop.classList.remove('loaded');
+      cnLabel.textContent = 'Click or drop an image';
+      cnClear.style.display = 'none';
+      cnFile.value = '';
+    }
+
+    cnDrop.addEventListener('click', e => {
+      if (e.target === cnClear) return;
+      cnFile.click();
+    });
+    cnClear.addEventListener('click', e => { e.stopPropagation(); clearCnImage(); });
+    cnDrop.addEventListener('dragover',  e => { e.preventDefault(); cnDrop.classList.add('drag-over'); });
+    cnDrop.addEventListener('dragleave', () => cnDrop.classList.remove('drag-over'));
+    cnDrop.addEventListener('drop', e => {
+      e.preventDefault();
+      cnDrop.classList.remove('drag-over');
+      const file = e.dataTransfer.files[0];
+      if (!file || !file.type.startsWith('image/')) return;
+      const r = new FileReader();
+      r.onload = ev => setCnImage(ev.target.result, file.name);
+      r.readAsDataURL(file);
+    });
+    cnFile.addEventListener('change', e => {
       const file = e.target.files[0]; if (!file) return;
-      const reader = new FileReader();
-      reader.onload = ev => {
-        Scheduler._cnImage = ev.target.result;
-        document.getElementById('sws-f-cn-imgurl').value = file.name;
-        document.getElementById('sws-cn-preview').src = ev.target.result;
-        document.getElementById('sws-cn-preview').classList.add('show');
-      };
-      reader.readAsDataURL(file);
+      const r = new FileReader();
+      r.onload = ev => setCnImage(ev.target.result, file.name);
+      r.readAsDataURL(file);
+      e.target.value = '';
     });
 
-    // Preset modal
+    // Expose clearCnImage so openModal can reset it
+    Scheduler._clearCnImage = clearCnImage;
+
+    // SwarmUI preset modal
     document.getElementById('sws-preset-close').addEventListener('click', closePresetPicker);
     document.getElementById('sws-preset-search').addEventListener('input', e => renderPresetList(e.target.value));
+
+    // Task presets modal
+    document.getElementById('sws-tp-close').addEventListener('click', closeTaskPresetsModal);
+    document.getElementById('sws-tp-save-btn').addEventListener('click', saveCurrentAsTaskPreset);
+    document.getElementById('sws-tp-name').addEventListener('keydown', e => { if (e.key === 'Enter') saveCurrentAsTaskPreset(); });
+    document.getElementById('sws-tp-modal').addEventListener('click', e => {
+      if (e.target === document.getElementById('sws-tp-modal')) closeTaskPresetsModal();
+    });
 
     // Lightbox
     document.getElementById('sws-lb').addEventListener('click', () => {
@@ -1021,9 +1549,6 @@ const Scheduler = (() => {
     document.getElementById('sws-gallery').addEventListener('scroll', closeGalCtx);
 
     // Close modals on overlay click
-    document.getElementById('sws-modal').addEventListener('click', e => {
-      if (e.target === document.getElementById('sws-modal')) closeModal();
-    });
     document.getElementById('sws-preset-modal').addEventListener('click', e => {
       if (e.target === document.getElementById('sws-preset-modal')) closePresetPicker();
     });
@@ -1084,7 +1609,7 @@ const Scheduler = (() => {
     if (hf.steps)  document.getElementById('sws-f-hf-steps').value  = hf.steps;
     if (hf.cfg)    document.getElementById('sws-f-hf-cfg').value    = hf.cfg;
     onRatioChange();
-    document.getElementById('sws-modal').classList.add('open');
+    document.getElementById('sws-right').classList.add('editing');
     setTimeout(() => document.getElementById('sws-f-name').focus(), 50);
   }
 
@@ -1105,8 +1630,11 @@ const Scheduler = (() => {
       else S.collapsedGroups.add(g);
       render();
     },
-    _applyPreset:  idx => applyPreset(idx),
-    _filteredPresets: null,
-    _cnImage: null,
+    _applyPreset:      idx => applyPreset(idx),
+    _loadTaskPreset:   id  => loadTaskPreset(id),
+    _deleteTaskPreset: id  => deleteTaskPreset(id),
+    _filteredPresets:  null,
+    _cnImage:          null,
+    _clearCnImage:     null,
   };
 })();

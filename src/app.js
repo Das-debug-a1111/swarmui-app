@@ -11,6 +11,115 @@ const App = {
   batchGroups: [],  // [{label, images:[{url, seed, prompt}]}]
 };
 
+// ── Txt2Img instances ─────────────────────────────────────────────────────────
+const _t2iStates = [{}]; // one state object per instance (empty = use defaults)
+
+function collectTxt2ImgState() {
+  return {
+    positive:       $('inp-positive')?.value         ?? '',
+    negative:       $('inp-negative')?.value         ?? '',
+    model:          $('sel-model')?.value            ?? '',
+    vae:            $('sel-vae')?.value              ?? '',
+    width:          $('inp-width')?.value            ?? '1024',
+    height:         $('inp-height')?.value           ?? '1024',
+    steps:          $('inp-steps')?.value            ?? '20',
+    cfg:            $('inp-cfg')?.value              ?? '7',
+    seed:           $('inp-seed')?.value             ?? '-1',
+    sampler:        $('sel-sampler')?.value          ?? '',
+    scheduler:      $('sel-scheduler')?.value        ?? '',
+    count:          $('sel-count')?.value            ?? '1',
+    // Refiner
+    refinerEnabled: $('chk-refiner')?.checked        ?? false,
+    refinerModel:   $('sel-refiner-model')?.value    ?? '',
+    refinerMethod:  $('sel-refiner-method')?.value   ?? '',
+    refinerScale:   $('inp-refiner-scale')?.value    ?? '1.5',
+    refinerPct:     $('inp-refiner-pct')?.value      ?? '0.6',
+    refinerSteps:   $('inp-refiner-steps')?.value    ?? '10',
+    refinerCfg:     $('inp-refiner-cfg')?.value      ?? '7',
+    // ControlNet
+    cnEnabled:      $('chk-cn')?.checked             ?? false,
+    cnModel:        $('sel-cn-model')?.value         ?? '',
+    cnType:         $('sel-cn-type')?.value          ?? 'none',
+    cnStrength:     $('inp-cn-strength')?.value      ?? '1',
+    cnStart:        $('inp-cn-start')?.value         ?? '0',
+    cnEnd:          $('inp-cn-end')?.value           ?? '1',
+    cnImage:        _cnImageData                     ?? null,
+    // LoRAs
+    loras: App.loraItems.map(item => ({
+      model:  item.model  || '',
+      weight: item.weight ?? 1,
+    })).filter(l => l.model),
+  };
+}
+
+function applyTxt2ImgState(state) {
+  const s  = state || {};
+  const g  = (key, def) => s[key] !== undefined ? s[key] : def;
+
+  const setSl = (slId, inpId, lblId, val, fmt) => {
+    const sl = $(slId), inp = $(inpId), lbl = $(lblId);
+    if (!sl || val === undefined || val === null) return;
+    sl.value = val;
+    if (inp) inp.value = val;
+    if (lbl) lbl.textContent = fmt ? fmt(+val) : val;
+  };
+  const setV = (id, val) => { const el = $(id); if (el && val != null) el.value = val; };
+
+  setV('inp-positive', g('positive', ''));
+  setV('inp-negative', g('negative', ''));
+  setV('sel-model',    g('model',    ''));
+  setV('sel-vae',      g('vae',      ''));
+  setV('inp-width',    g('width',    '1024'));
+  setV('inp-height',   g('height',   '1024'));
+  setSl('sl-steps', 'inp-steps', 'lbl-steps', g('steps',  '20'));
+  setSl('sl-cfg',   'inp-cfg',   'lbl-cfg',   g('cfg',    '7'));
+  setV('inp-seed',     g('seed',    '-1'));
+  setV('sel-sampler',  g('sampler',  ''));
+  setV('sel-scheduler',g('scheduler',''));
+  setV('sel-count',    g('count',   '1'));
+
+  // Refiner
+  const refEn = g('refinerEnabled', false);
+  $('chk-refiner').checked            = refEn;
+  $('refiner-fields').style.display   = refEn ? '' : 'none';
+  setV('sel-refiner-model',   g('refinerModel',  ''));
+  setV('sel-refiner-method',  g('refinerMethod', ''));
+  setSl('sl-refiner-scale', 'inp-refiner-scale', 'lbl-refiner-scale', g('refinerScale','1.5'), v => v.toFixed(2)+'×');
+  setSl('sl-refiner-pct',   'inp-refiner-pct',   'lbl-refiner-pct',   g('refinerPct',  '0.6'), v => Math.round(v*100)+'%');
+  setSl('sl-refiner-steps', 'inp-refiner-steps', 'lbl-refiner-steps', g('refinerSteps','10'));
+  setSl('sl-refiner-cfg',   'inp-refiner-cfg',   'lbl-refiner-cfg',   g('refinerCfg',  '7'));
+
+  // ControlNet
+  const cnEn = g('cnEnabled', false);
+  $('chk-cn').checked              = cnEn;
+  $('cn-fields').style.display     = cnEn ? '' : 'none';
+  setV('sel-cn-model',    g('cnModel',   ''));
+  setV('sel-cn-type',     g('cnType',    'none'));
+  setSl('sl-cn-strength','inp-cn-strength','lbl-cn-strength', g('cnStrength','1'), v => v.toFixed(2));
+  setSl('sl-cn-start',   'inp-cn-start',  'lbl-cn-start',    g('cnStart',  '0'), v => Math.round(v*100)+'%');
+  setSl('sl-cn-end',     'inp-cn-end',    'lbl-cn-end',       g('cnEnd',    '1'), v => Math.round(v*100)+'%');
+  const cnImg = g('cnImage', null);
+  if (cnImg) setCNImage(cnImg); else clearCNImage();
+
+  // LoRAs
+  $('lora-list').innerHTML = '';
+  App.loraItems = [];
+  const loras = g('loras', []);
+  loras.forEach(l => {
+    if (!l.model) return;
+    addLoRAItem();
+    const item = App.loraItems[App.loraItems.length - 1];
+    item.model  = l.model;
+    item.weight = +l.weight || 1;
+    const div   = $('lora-list').lastElementChild;
+    if (div) {
+      const sel = div.querySelector('.lora-sel');   if (sel) sel.value = l.model;
+      const sl  = div.querySelector('.lora-weight-sl');  if (sl)  sl.value  = item.weight;
+      const inp = div.querySelector('.lora-weight-inp'); if (inp) inp.value = item.weight;
+    }
+  });
+}
+
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
 
@@ -56,6 +165,7 @@ async function loadAll() {
     loadRefinerModels(),
     loadCNModels(),
   ]);
+  Img2Vid.onConnect();
 }
 
 async function loadCNModels() {
@@ -140,14 +250,60 @@ async function loadParams() {
     }
 
     const upscaleMethodParam = params.find(p => p.id === 'refinerupscalemethod');
-    if (upscaleMethodParam?.values) {
-      const sel = $('sel-refiner-method');
+    const sel = $('sel-refiner-method');
+    const upscaleVals = upscaleMethodParam?.values?.length ? upscaleMethodParam.values : [
+      'pixel-lanczos','pixel-bicubic','pixel-bilinear','pixel-nearest',
+      'model-remacri_original.pth','model-4x-UltraSharp.pth','model-ESRGAN_4x.pth',
+    ];
+    {
       const saved = localStorage.getItem('swarm-upscale-method') || 'model-remacri_original.pth';
-      sel.innerHTML = upscaleMethodParam.values.map(v =>
-        `<option value="${esc(v)}"${v === saved ? ' selected' : ''}>${esc(v)}</option>`
+      sel.innerHTML = upscaleVals.map(v =>
+        `<option value="${esc(v)}"${v === saved ? ' selected' : ''}>${esc(friendlyUpscaleName(v))}</option>`
       ).join('');
     }
+
+    // CN preprocessors — try several possible IDs SwarmUI may use
+    const cnProcParam = params.find(p =>
+      p.id === 'controlnetpreprocessor' ||
+      p.id === 'controlnet_preprocessor' ||
+      p.id === 'controlnetpreprocessortype' ||
+      p.id === 'cnpreprocessor'
+    );
+    if (cnProcParam?.values?.length) {
+      const sel = $('sel-cn-type');
+      const saved = localStorage.getItem('swarm-cn-preprocessor') || 'None';
+      sel.innerHTML = cnProcParam.values.map(v =>
+        `<option value="${esc(v)}"${v === saved ? ' selected' : ''}>${esc(friendlyProcName(v))}</option>`
+      ).join('');
+    } else {
+      // Log available param IDs to help diagnose
+      console.info('[loadParams] available param IDs:', params.map(p => p.id).join(', '));
+    }
   } catch (e) { console.warn('loadParams:', e); }
+}
+
+function friendlyUpscaleName(v) {
+  if (!v) return v;
+  if (v.startsWith('pixel-')) {
+    const method = v.slice(6);
+    return 'Pixel — ' + method.charAt(0).toUpperCase() + method.slice(1);
+  }
+  if (v.startsWith('model-')) {
+    const file = v.slice(6).replace(/\.[^.]+$/, ''); // strip extension
+    return 'Model — ' + file;
+  }
+  return v;
+}
+
+function friendlyProcName(name) {
+  if (!name || name === 'None') return 'None (no preprocessing)';
+  return name
+    .replace(/Preprocessor$/i, '')
+    .replace(/DepthMap$/i, ' Depth')
+    .replace(/([a-z])([A-Z])/g, '$1 $2')
+    .replace(/[-_+]/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 }
 
 // ── Sidebar: collapsible sections ─────────────────────────────────────────────
@@ -354,6 +510,15 @@ function renderLoRA(item) {
 }
 
 $('btn-add-lora').addEventListener('click', addLoRAItem);
+$('btn-reload-loras').addEventListener('click', async () => {
+  const btn = $('btn-reload-loras');
+  btn.style.opacity = '0.4';
+  btn.style.pointerEvents = 'none';
+  if (typeof TagComplete !== 'undefined') TagComplete.clearModelCache();
+  await loadLoRAs();
+  btn.style.opacity = '';
+  btn.style.pointerEvents = '';
+});
 
 // ── Generate ──────────────────────────────────────────────────────────────────
 $('btn-generate').addEventListener('click', () => {
@@ -365,6 +530,10 @@ $('btn-generate').addEventListener('click', () => {
 function startGeneration() {
   const prompt = $('inp-positive').value.trim();
   if (!prompt) { alert('Enter a positive prompt first.'); return; }
+  if ($('chk-cn').checked && !_cnImageData) {
+    showErrorToast('ControlNet is enabled but no image is loaded. Add a control image or uncheck ControlNet.');
+    return;
+  }
 
   App.running = true;
   $('btn-generate').textContent = 'Stop';
@@ -413,15 +582,16 @@ function startGeneration() {
 
   // ControlNet params
   if ($('chk-cn').checked && _cnImageData) {
-    payload.controlnetimage      = _cnImageData;
+    payload.controlnetimageinput = _cnImageData;
     payload.controlnetstrength   = parseFloat($('inp-cn-strength').value) || 1;
-    payload.controlnetstartpct   = parseFloat($('inp-cn-start').value)    || 0;
-    payload.controlnetendpct     = parseFloat($('inp-cn-end').value)      || 1;
+    payload.controlnetstart      = parseFloat($('inp-cn-start').value)    || 0;
+    payload.controlnetend        = parseFloat($('inp-cn-end').value)      || 1;
     const cnModel = $('sel-cn-model').value;
     if (cnModel) payload.controlnetmodel = cnModel;
     const cnType = $('sel-cn-type').value;
-    if (cnType && cnType !== 'none') payload.controlnetpreprocessor = cnType;
+    if (cnType && cnType !== 'None') payload.controlnetpreprocessor = cnType;
     localStorage.setItem('swarm-cn-model', cnModel);
+    localStorage.setItem('swarm-cn-preprocessor', cnType);
   }
 
   // Remove undefined keys
@@ -571,11 +741,13 @@ function addImageToGallery(img, groupLabel, isFirst) {
   div.innerHTML = `
     <img src="${img.url}" alt="Generated image" loading="lazy">
     <div class="gallery-img-actions">
-      <button class="gal-btn" data-action="seed">Seed</button>
-      <button class="gal-btn" data-action="inpaint">Inpaint</button>
-      <button class="gal-btn" data-action="schedule">Sched</button>
-      <button class="gal-btn" data-action="info">Info</button>
-      <button class="gal-btn" data-action="save">Save</button>
+      <button class="gal-btn" data-action="seed"      title="Use this seed">🎲</button>
+      <button class="gal-btn" data-action="inpaint"   title="Inpaint">🖌</button>
+      <button class="gal-btn" data-action="schedule"  title="Send to Scheduler">📅</button>
+      <button class="gal-btn" data-action="watermark" title="Send to Watermark">💧</button>
+      <button class="gal-btn" data-action="img2vid"   title="Send to Img2Vid">🎬</button>
+      <button class="gal-btn" data-action="info"      title="Image info">ℹ</button>
+      <button class="gal-btn" data-action="save"      title="Save image">💾</button>
     </div>`;
 
 
@@ -592,6 +764,14 @@ function addImageToGallery(img, groupLabel, isFirst) {
   div.querySelector('[data-action="schedule"]').addEventListener('click', e => {
     e.stopPropagation();
     sendToScheduler(img.seed);
+  });
+  div.querySelector('[data-action="watermark"]').addEventListener('click', e => {
+    e.stopPropagation();
+    sendToWatermark(img.url);
+  });
+  div.querySelector('[data-action="img2vid"]').addEventListener('click', e => {
+    e.stopPropagation();
+    sendToImg2Vid(img.url);
   });
   div.querySelector('[data-action="info"]').addEventListener('click', e => {
     e.stopPropagation();
@@ -851,18 +1031,54 @@ async function downloadImage(url) {
 }
 
 // ── Lightbox ──────────────────────────────────────────────────────────────────
+let _lbImgs = [];
+let _lbIdx  = 0;
+
 function openLightbox(url) {
-  $('lightbox-img').src = url;
+  const allImgs = [...document.querySelectorAll('#gallery .gallery-img img')];
+  const hit = allImgs.find(img => img.src === url);
+  if (hit) {
+    const row   = hit.closest('.gallery-row');
+    const srcs  = (row ? [...row.querySelectorAll('.gallery-img img')] : [hit]).map(i => i.src);
+    _lbImgs = srcs;
+    _lbIdx  = srcs.indexOf(url);
+    if (_lbIdx === -1) { _lbImgs = [url]; _lbIdx = 0; }
+  } else {
+    _lbImgs = [url]; _lbIdx = 0;
+  }
+  $('lightbox-img').src = _lbImgs[_lbIdx];
   $('lightbox').classList.remove('hidden');
+  _lbUpdateCounter();
 }
+
 function closeLightbox() {
   $('lightbox').classList.add('hidden');
   $('lightbox-img').src = '';
+  _lbImgs = []; _lbIdx = 0;
+  _lbUpdateCounter();
+}
+
+function _lbGo(dir) {
+  if (_lbImgs.length <= 1) return;
+  _lbIdx = (_lbIdx + dir + _lbImgs.length) % _lbImgs.length;
+  $('lightbox-img').src = _lbImgs[_lbIdx];
+  _lbUpdateCounter();
+}
+
+function _lbUpdateCounter() {
+  const el = $('lightbox-counter');
+  if (el) el.textContent = _lbImgs.length > 1 ? `${_lbIdx + 1} / ${_lbImgs.length}` : '';
 }
 
 $('lightbox-close').addEventListener('click', closeLightbox);
 $('lightbox-backdrop').addEventListener('click', closeLightbox);
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLightbox(); });
+document.addEventListener('keydown', e => {
+  if (!$('lightbox').classList.contains('hidden')) {
+    if (e.key === 'Escape')      { closeLightbox(); return; }
+    if (e.key === 'ArrowRight')  { e.preventDefault(); _lbGo(1);  return; }
+    if (e.key === 'ArrowLeft')   { e.preventDefault(); _lbGo(-1); return; }
+  }
+});
 
 // ── Presets (localStorage) ────────────────────────────────────────────────────
 const PRESETS_KEY = 'swarmapp-presets';
@@ -1033,14 +1249,23 @@ function switchTab(tab) {
   const isInp  = tab === 'inpaint';
   const isSch  = tab === 'scheduler';
   const isPng  = tab === 'pnginfo';
+  const isWm   = tab === 'watermark';
+  const isI2V  = tab === 'img2vid';
+  const isMdl  = tab === 'models';
 
   $('view-txt2img').style.display = isTxt ? 'contents' : 'none';
   $('view-inpaint').classList.toggle('active', isInp);
   $('view-scheduler').classList.toggle('active', isSch);
   $('view-pnginfo').classList.toggle('active', isPng);
+  $('view-watermark').classList.toggle('active', isWm);
+  $('view-img2vid').classList.toggle('active', isI2V);
+  $('view-models').classList.toggle('active', isMdl);
 
   if (isInp) { Inpaint.init(); Inpaint.onShow(); }
   if (isSch) { Scheduler.init(); Scheduler.onShow(); }
+  if (isWm)  { Watermark.init(); }
+  if (isI2V) { Img2Vid.onShow(); }
+  if (isMdl) { ModelDL.onShow(); }
 }
 
 document.querySelectorAll('.tab').forEach(tab => {
@@ -1051,6 +1276,26 @@ document.querySelectorAll('.tab').forEach(tab => {
 function sendToInpaint(url) {
   switchTab('inpaint');
   Inpaint.loadFromSrc(url);
+}
+
+// ── Send to Watermark (from gallery) ─────────────────────────────────────────
+function sendToWatermark(url) {
+  switchTab('watermark');
+  Watermark.loadFromSrc(url);
+}
+
+// ── Send to Img2Vid (from gallery / inpaint / scheduler) ─────────────────────
+function sendToImg2Vid(url) {
+  switchTab('img2vid');
+  // Convert URL to dataUrl for Img2Vid
+  fetch(url)
+    .then(r => r.blob())
+    .then(blob => {
+      const reader = new FileReader();
+      reader.onload = e => Img2Vid.receiveImage(e.target.result);
+      reader.readAsDataURL(blob);
+    })
+    .catch(err => console.error('[sendToImg2Vid]', err));
 }
 
 // ── Send to Scheduler (from gallery) ─────────────────────────────────────────
@@ -1276,6 +1521,14 @@ window.addEventListener('DOMContentLoaded', () => {
 
   // Init inpaint (binds events only, no API calls yet)
   Inpaint.init();
+
+  // ── Txt2Img instance bar ──────────────────────────────────────────────────
+  createInstanceBar(document.getElementById('txt2img-inst-bar'), {
+    onSave:   (idx) => { _t2iStates[idx] = collectTxt2ImgState(); },
+    onLoad:   (idx) => { applyTxt2ImgState(_t2iStates[idx]); },
+    onNew:    (idx) => { _t2iStates[idx] = {}; },
+    onRemove: (idx) => { _t2iStates.splice(idx, 1); },
+  });
 
   // Load local presets (no server needed)
   loadPresets();
