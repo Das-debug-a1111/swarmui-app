@@ -8,5 +8,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   charThumbsReady:     ()     => ipcRenderer.invoke('char:thumbsReady'),
   configGet:           ()     => ipcRenderer.invoke('config:get'),
   configPickDataFolder:()     => ipcRenderer.invoke('config:pickDataFolder'),
-  onUpdateAvailable:   (cb)  => ipcRenderer.on('update-available', (_, v) => cb(v)),
+  onUpdateAvailable:    (cb)  => ipcRenderer.on('update-available', (_, v) => cb(v)),
+
+  // Model downloads
+  pickModelsFolder:     ()         => ipcRenderer.invoke('models:pickFolder'),
+  downloadModel:        (url, dst) => ipcRenderer.invoke('models:download', { url, destPath: dst }),
+  onModelProgress:      (cb)       => ipcRenderer.on('models:progress', (_, d) => cb(d)),
+  removeModelProgress:  ()         => ipcRenderer.removeAllListeners('models:progress'),
 });

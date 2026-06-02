@@ -24,6 +24,9 @@
       <div class="tab" data-tab="inpaint">Inpaint</div>
       <div class="tab" data-tab="scheduler">Scheduler</div>
       <div class="tab" data-tab="pnginfo">PNG Info</div>
+      <div class="tab" data-tab="watermark">Watermark</div>
+      <div class="tab" data-tab="img2vid">Img2Vid</div>
+      <div class="tab" data-tab="models">Models</div>
     </div>
     <div id="status-bar">
       <div class="status-dot" id="status-dot"></div>
@@ -80,7 +83,11 @@
     <!-- LoRAs -->
     <div class="sidebar-section">
       <div class="sidebar-section-hdr" data-section="loras">
-        <span>LoRAs</span><span class="arrow">▾</span>
+        <span>LoRAs</span>
+        <div style="display:flex;align-items:center;gap:6px">
+          <button id="btn-reload-loras" title="Reload LoRA list" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:13px;padding:0;line-height:1" onclick="event.stopPropagation()">↻</button>
+          <span class="arrow">▾</span>
+        </div>
       </div>
       <div class="sidebar-section-body" id="sec-loras">
         <div class="lora-list" id="lora-list"></div>
@@ -294,6 +301,9 @@
   <!-- ── Main ───────────────────────────────────────────────────────────── -->
   <div id="main">
 
+    <!-- Instance bar (txt2img) -->
+    <div id="txt2img-inst-bar"></div>
+
     <!-- Prompt area -->
     <div id="prompt-area">
       <div class="prompt-wrap">
@@ -349,214 +359,245 @@
   <!-- ── Inpaint view ─────────────────────────────────────────────────────── -->
   <div id="view-inpaint">
 
-    <!-- Canvas side -->
-    <div id="inp-canvas-side">
+    <!-- Instance bar (inpaint) -->
+    <div id="inp-inst-bar"></div>
 
-      <div id="inp-toolbar">
-        <button class="inp-tbtn on" id="inp-brush-btn">🖌 Brush</button>
-        <button class="inp-tbtn" id="inp-eraser-btn">◻ Eraser</button>
-        <button class="inp-tbtn" id="inp-undo-btn">↩ Undo</button>
-        <button class="inp-tbtn" id="inp-clear-btn">🗑 Clear</button>
-        <button class="inp-tbtn" id="inp-invert-btn">⊕ Invert</button>
-        <span class="inp-sep"></span>
-        <label class="inp-tlbl">Size <span id="inp-brush-val">40</span>px</label>
-        <input type="range" id="inp-brush-range" min="1" max="200" value="40">
-        <label class="inp-tlbl">Strength <span id="inp-brush-opacity-val">100</span>%</label>
-        <input type="range" id="inp-brush-opacity" min="1" max="100" value="100">
-        <label class="inp-tlbl">Preview</label>
-        <input type="range" id="inp-opacity-range" min="10" max="95" value="72">
-        <span class="inp-sep"></span>
-        <button class="inp-tbtn" id="inp-toolbar-load">📂 Load</button>
-        <input type="file" id="inp-file-input" accept="image/*" style="display:none">
+    <!-- Top: canvas (left) | results (right) -->
+    <div id="inp-top">
+
+      <!-- Canvas side -->
+      <div id="inp-canvas-side">
+        <div id="inp-toolbar">
+          <button class="inp-tbtn on" id="inp-brush-btn">🖌 Brush</button>
+          <button class="inp-tbtn" id="inp-eraser-btn">◻ Eraser</button>
+          <button class="inp-tbtn" id="inp-undo-btn">↩ Undo</button>
+          <button class="inp-tbtn" id="inp-clear-btn">🗑 Clear</button>
+          <button class="inp-tbtn" id="inp-invert-btn">⊕ Invert</button>
+          <span class="inp-sep"></span>
+          <label class="inp-tlbl">Size <span id="inp-brush-val">40</span>px</label>
+          <input type="range" id="inp-brush-range" min="1" max="200" value="40">
+          <label class="inp-tlbl">Strength <span id="inp-brush-opacity-val">100</span>%</label>
+          <input type="range" id="inp-brush-opacity" min="1" max="100" value="100">
+          <label class="inp-tlbl">Preview</label>
+          <input type="range" id="inp-opacity-range" min="10" max="95" value="72">
+          <span class="inp-sep"></span>
+          <button class="inp-tbtn" id="inp-toolbar-load">📂 Load</button>
+          <input type="file" id="inp-file-input" accept="image/*" style="display:none">
+        </div>
+        <div id="inp-canvas-wrap">
+          <div id="inp-drop-zone">
+            <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
+              <rect x="3" y="3" width="18" height="18" rx="2"/>
+              <path d="M3 15l5-5 4 4 3-3 6 6"/>
+              <circle cx="8.5" cy="8.5" r="1.5"/>
+            </svg>
+            <p>Drag & drop an image here</p>
+            <p style="font-size:11px;color:var(--muted)">or paste from clipboard (⌘V)</p>
+            <button id="inp-drop-btn">Choose file</button>
+          </div>
+          <div id="inp-stack">
+            <canvas id="inp-c-img"></canvas>
+            <canvas id="inp-c-mask"></canvas>
+            <canvas id="inp-c-cur"></canvas>
+          </div>
+        </div>
+      </div><!-- /inp-canvas-side -->
+
+      <!-- Results panel -->
+      <div id="inp-results-panel">
+        <div class="inp-panel-hdr">
+          <span>Generated</span>
+          <button id="inp-clear-history" class="inp-btn-sm inp-btn-danger" title="Clear history">🗑</button>
+        </div>
+        <div id="inp-pbar-wrap"><div id="inp-pbar"></div></div>
+        <div id="inp-status"></div>
+        <div id="inp-forge-offline" class="inp-forge-offline">
+          <div style="font-size:32px;margin-bottom:8px">🔌</div>
+          <div style="font-weight:600;color:var(--text2);margin-bottom:5px">Forge is offline</div>
+          <div style="font-size:11px;line-height:1.6">
+            Démarrez Forge avec <code style="background:var(--bg3);padding:1px 5px;border-radius:3px">pc forge</code><br>
+            puis cliquez <strong>↺</strong> pour reconnect.
+          </div>
+          <div class="inp-forge-hint" style="margin-top:8px;font-size:10px;color:var(--red);min-height:14px"></div>
+        </div>
+        <div id="inp-results-scroll">
+          <div id="inp-results"></div>
+        </div>
       </div>
 
-      <div id="inp-canvas-wrap">
-        <div id="inp-drop-zone">
-          <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2">
-            <rect x="3" y="3" width="18" height="18" rx="2"/>
-            <path d="M3 15l5-5 4 4 3-3 6 6"/>
-            <circle cx="8.5" cy="8.5" r="1.5"/>
-          </svg>
-          <p>Drag & drop an image here</p>
-          <p style="font-size:11px;color:var(--muted)">or paste from clipboard (⌘V)</p>
-          <button id="inp-drop-btn">Choose file</button>
-        </div>
-        <div id="inp-stack">
-          <canvas id="inp-c-img"></canvas>
-          <canvas id="inp-c-mask"></canvas>
-          <canvas id="inp-c-cur"></canvas>
-        </div>
-      </div>
+    </div><!-- /inp-top -->
 
-    </div><!-- /inp-canvas-side -->
+    <!-- Bottom: settings bar -->
+    <div id="inp-bottom">
 
-    <!-- Settings sidebar -->
-    <div id="inp-sidebar">
-
-      <!-- Model -->
-      <div class="inp-sec">
-        <div class="inp-sec-hdr">Model</div>
+      <!-- Col 1: Model + Forge URL + Presets -->
+      <div class="inp-col">
+        <div class="inp-col-lbl">Model</div>
         <select class="inp-sel" id="inp-sel-model">
           <option value="">— Connect first —</option>
         </select>
-      </div>
-
-      <!-- Presets -->
-      <div class="inp-sec">
-        <div class="inp-sec-hdr">Presets</div>
+        <div style="display:flex;align-items:center;gap:5px;margin-top:7px;margin-bottom:3px">
+          <span class="inp-col-lbl" style="margin:0;flex:1">Forge</span>
+          <span id="inp-forge-indicator" style="font-size:10px;color:var(--muted)">● Offline</span>
+        </div>
+        <div style="display:flex;gap:5px">
+          <input type="text" class="inp-field" id="inp-forge-url"
+            value="http://192.168.8.67:58190"
+            placeholder="http://host:port"
+            style="flex:1;font-size:10px;font-family:monospace">
+          <button class="inp-btn-sm" id="inp-forge-reconnect" title="Reconnect to Forge">↺</button>
+        </div>
+        <div class="inp-col-lbl" style="margin-top:7px">Presets</div>
         <div style="display:flex;gap:5px">
           <select class="inp-sel" id="inpp-preset-sel" style="flex:1;min-width:0"></select>
           <button class="inp-btn-sm" id="inpp-preset-load">Load</button>
           <button class="inp-btn-sm inp-btn-danger" id="inpp-preset-del">✕</button>
         </div>
-        <div style="display:flex;gap:5px;margin-top:6px">
+        <div style="display:flex;gap:5px;margin-top:4px">
           <input type="text" class="inp-field" id="inpp-preset-name" placeholder="Preset name…" style="flex:1">
           <button class="inp-btn-sm inp-btn-green" id="inpp-preset-save">Save</button>
         </div>
       </div>
 
-      <!-- Inpainting -->
-      <div class="inp-sec">
-        <div class="inp-sec-hdr">Inpainting <span class="arrow">▼</span></div>
-        <div class="inp-sec-body">
-          <div class="inp-field-row">
-            <div class="inp-lrow">
-              <span>Denoising strength</span>
-              <span class="inp-val" id="inp-denoise-val">0.75</span>
+      <!-- Col 2: Inpainting + Zone -->
+      <div class="inp-col">
+        <div class="inp-col-lbl">Inpainting</div>
+        <div class="inp-bcol-row">
+          <div class="inp-bcol-lrow"><span>Denoising</span><span class="inp-val" id="inp-denoise-val">0.75</span></div>
+          <input type="range" class="inp-slider" id="inp-denoise" min="0" max="1" step="0.01" value="0.75">
+        </div>
+        <div class="inp-bcol-row">
+          <div class="inp-bcol-lrow"><span>Mask blur</span><span class="inp-val" id="inp-mblur-val">4</span></div>
+          <input type="range" class="inp-slider" id="inp-mblur" min="0" max="64" step="1" value="4">
+        </div>
+        <div class="inp-col-lbl" style="margin-top:4px">Mask mode</div>
+        <div class="inp-radios">
+          <input type="radio" name="inp-mmode" id="inp-mm-masked" value="masked" checked>
+          <label for="inp-mm-masked">Masked</label>
+          <input type="radio" name="inp-mmode" id="inp-mm-not" value="not_masked">
+          <label for="inp-mm-not">Not masked</label>
+        </div>
+        <div class="inp-col-lbl" style="margin-top:4px">Fill content</div>
+        <select class="inp-sel" id="inp-fill-mode" style="margin-bottom:2px">
+          <option value="1" selected>Original</option>
+          <option value="3">Latent nothing</option>
+          <option value="2">Latent noise</option>
+          <option value="0">Fill (blend)</option>
+        </select>
+        <div class="inp-col-lbl" style="margin-top:4px">Inpaint area</div>
+        <div class="inp-radios">
+          <input type="radio" name="inp-area" id="inp-area-whole" value="whole">
+          <label for="inp-area-whole">Whole</label>
+          <input type="radio" name="inp-area" id="inp-area-masked" value="only_masked" checked>
+          <label for="inp-area-masked">Only masked</label>
+        </div>
+        <div class="inp-bcol-row" style="margin-top:4px">
+          <div class="inp-bcol-lrow"><span>Padding px</span><span class="inp-val" id="inp-pad-val">32</span></div>
+          <input type="range" class="inp-slider" id="inp-pad" min="0" max="256" step="4" value="32">
+        </div>
+        <label class="inpp-toggle-row" style="margin-top:5px">
+          <input type="checkbox" id="inpp-soft">
+          <div class="inpp-track"><div class="inpp-thumb"></div></div>
+          <span style="font-size:11px;color:var(--text2)">Soft Inpainting</span>
+        </label>
+        <div id="inpp-soft-params" style="display:none;padding-left:2px;margin-top:2px">
+          <div class="inp-bcol-row">
+            <div class="inp-bcol-lrow">
+              <span style="font-size:10px;color:var(--muted)">Schedule bias</span>
+              <span class="inp-val" id="inp-soft-bias-val">1.0</span>
             </div>
-            <input type="range" class="inp-slider" id="inp-denoise" min="0" max="1" step="0.01" value="0.75">
+            <input type="range" class="inp-slider" id="inp-soft-bias" min="0.1" max="2" step="0.1" value="1">
           </div>
-
-          <div class="inp-field-row">
-            <div class="inp-lrow">
-              <span>Mask blur</span>
-              <span class="inp-val" id="inp-mblur-val">4</span>
+          <div class="inp-bcol-row">
+            <div class="inp-bcol-lrow">
+              <span style="font-size:10px;color:var(--muted)">Preservation</span>
+              <span class="inp-val" id="inp-soft-str-val">0.50</span>
             </div>
-            <input type="range" class="inp-slider" id="inp-mblur" min="0" max="64" step="1" value="4">
+            <input type="range" class="inp-slider" id="inp-soft-str" min="0" max="1" step="0.05" value="0.5">
           </div>
-
-          <div class="inp-field-row">
-            <span class="inp-label">Mask mode</span>
-            <div class="inp-radios">
-              <input type="radio" name="inp-mmode" id="inp-mm-masked" value="masked" checked>
-              <label for="inp-mm-masked">Inpaint masked</label>
-              <input type="radio" name="inp-mmode" id="inp-mm-not" value="not_masked">
-              <label for="inp-mm-not">Inpaint not masked</label>
+          <div class="inp-bcol-row">
+            <div class="inp-bcol-lrow">
+              <span style="font-size:10px;color:var(--muted)">Contrast boost</span>
+              <span class="inp-val" id="inp-soft-contrast-val">4.0</span>
             </div>
+            <input type="range" class="inp-slider" id="inp-soft-contrast" min="1" max="8" step="0.5" value="4">
+          </div>
+          <div class="inp-bcol-row">
+            <div class="inp-bcol-lrow">
+              <span style="font-size:10px;color:var(--muted)">Mask influence</span>
+              <span class="inp-val" id="inp-soft-maskinf-val">0.0</span>
+            </div>
+            <input type="range" class="inp-slider" id="inp-soft-maskinf" min="0" max="1" step="0.05" value="0">
+          </div>
+          <div class="inp-bcol-row">
+            <div class="inp-bcol-lrow">
+              <span style="font-size:10px;color:var(--muted)">Diff. threshold</span>
+              <span class="inp-val" id="inp-soft-diffthresh-val">0.50</span>
+            </div>
+            <input type="range" class="inp-slider" id="inp-soft-diffthresh" min="0" max="1" step="0.05" value="0.5">
+          </div>
+          <div class="inp-bcol-row">
+            <div class="inp-bcol-lrow">
+              <span style="font-size:10px;color:var(--muted)">Diff. contrast</span>
+              <span class="inp-val" id="inp-soft-diffcontrast-val">2.0</span>
+            </div>
+            <input type="range" class="inp-slider" id="inp-soft-diffcontrast" min="1" max="8" step="0.5" value="2">
           </div>
         </div>
       </div>
 
-      <!-- Zone -->
-      <div class="inp-sec">
-        <div class="inp-sec-hdr">Zone <span class="arrow">▼</span></div>
-        <div class="inp-sec-body">
-          <div class="inp-field-row">
-            <span class="inp-label">Inpaint area</span>
-            <div class="inp-radios">
-              <input type="radio" name="inp-area" id="inp-area-whole" value="whole">
-              <label for="inp-area-whole">Whole picture</label>
-              <input type="radio" name="inp-area" id="inp-area-masked" value="only_masked" checked>
-              <label for="inp-area-masked">Only masked</label>
+      <!-- Col 3: Sampling + Output size -->
+      <div class="inp-col">
+        <div class="inp-col-lbl">Sampling</div>
+        <select class="inp-sel" id="inp-sampler"></select>
+        <select class="inp-sel" id="inp-scheduler"></select>
+        <div class="inp-bcol-row">
+          <div class="inp-bcol-lrow"><span>Steps</span><span class="inp-val" id="inpp-steps-val">20</span></div>
+          <input type="range" class="inp-slider" id="inpp-steps" min="1" max="150" step="1" value="20">
+        </div>
+        <div class="inp-bcol-row">
+          <div class="inp-bcol-lrow"><span>CFG Scale</span><span class="inp-val" id="inpp-cfg-val">6.0</span></div>
+          <input type="range" class="inp-slider" id="inpp-cfg" min="1" max="30" step="0.5" value="6">
+        </div>
+        <div class="inp-col-lbl" style="margin-top:4px">Output size</div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <input type="number" class="inp-field" id="inp-w" value="1024" min="64" max="4096" step="64" style="flex:1;text-align:center">
+          <span style="color:var(--muted)">×</span>
+          <input type="number" class="inp-field" id="inp-h" value="1024" min="64" max="4096" step="64" style="flex:1;text-align:center">
+        </div>
+        <div class="inp-ratio-grid">
+          <button class="inp-rbtn" id="inp-auto-ratio">🎯 Auto</button>
+          <button class="inp-rbtn" data-w="1152" data-h="768">3:2</button>
+          <button class="inp-rbtn" data-w="768"  data-h="1152">2:3</button>
+          <button class="inp-rbtn" data-w="1344" data-h="768">16:9</button>
+          <button class="inp-rbtn" data-w="768"  data-h="1344">9:16</button>
+          <button class="inp-rbtn" data-w="1024" data-h="1024">1:1</button>
+        </div>
+      </div>
+
+      <!-- Col 4: Prompts + Generate -->
+      <div class="inp-col inp-col-grow">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div class="inp-col-lbl">Prompts</div>
+          <button onclick="CharSelector.toggleFor('inp-prompt')" class="cs-toggle-btn" style="font-size:10px;padding:2px 7px">Characters</button>
+        </div>
+        <textarea class="inp-ta" id="inp-prompt" rows="3" placeholder="Positive prompt…" style="flex:1"></textarea>
+        <textarea class="inp-ta" id="inp-neg" rows="2" placeholder="Negative…" style="margin-top:4px"></textarea>
+        <!-- LoRAs (Forge) -->
+        <div style="margin-top:5px">
+          <div id="inp-lora-toggle" style="display:flex;align-items:center;justify-content:space-between;cursor:pointer;padding:3px 0;user-select:none">
+            <span class="inp-col-lbl" style="margin:0">LoRAs <span id="inp-lora-count" style="font-size:10px;color:var(--muted);font-weight:400;text-transform:none"></span></span>
+            <div style="display:flex;align-items:center;gap:5px">
+              <button class="inp-btn-sm" id="inp-lora-add" style="padding:1px 6px;font-size:10px" title="Add LoRA">+</button>
+              <span id="inp-lora-arrow" style="font-size:10px;color:var(--muted)">▶</span>
             </div>
           </div>
-
-          <div class="inp-field-row">
-            <div class="inp-lrow">
-              <span>Padding px</span>
-              <span class="inp-val" id="inp-pad-val">32</span>
-            </div>
-            <input type="range" class="inp-slider" id="inp-pad" min="0" max="256" step="4" value="32">
-          </div>
-
-          <div class="inp-field-row" style="margin-bottom:0">
-            <label class="inpp-toggle-row">
-              <input type="checkbox" id="inpp-soft">
-              <div class="inpp-track"><div class="inpp-thumb"></div></div>
-              <span class="inp-label" style="margin:0">Differential diffusion</span>
-            </label>
-          </div>
+          <div id="inp-lora-list" style="display:none;margin-top:3px"></div>
         </div>
+        <button id="inp-gen-btn" style="margin-top:6px">▶ Generate</button>
       </div>
 
-      <!-- Sampling -->
-      <div class="inp-sec">
-        <div class="inp-sec-hdr">Sampling <span class="arrow">▼</span></div>
-        <div class="inp-sec-body">
-          <div class="inp-field-row">
-            <span class="inp-label">Sampler</span>
-            <select class="inp-sel" id="inp-sampler"></select>
-          </div>
-
-          <div class="inp-field-row">
-            <span class="inp-label">Scheduler</span>
-            <select class="inp-sel" id="inp-scheduler"></select>
-          </div>
-
-          <div class="inp-field-row">
-            <div class="inp-lrow">
-              <span>Steps</span>
-              <span class="inp-val" id="inpp-steps-val">20</span>
-            </div>
-            <input type="range" class="inp-slider" id="inpp-steps" min="1" max="150" step="1" value="20">
-          </div>
-
-          <div class="inp-field-row">
-            <div class="inp-lrow">
-              <span>CFG Scale</span>
-              <span class="inp-val" id="inpp-cfg-val">6.0</span>
-            </div>
-            <input type="range" class="inp-slider" id="inpp-cfg" min="1" max="30" step="0.5" value="6">
-          </div>
-        </div>
-      </div>
-
-      <!-- Output size -->
-      <div class="inp-sec">
-        <div class="inp-sec-hdr">Output size <span class="arrow">▼</span></div>
-        <div class="inp-sec-body">
-          <div style="display:flex;gap:8px;align-items:center">
-            <input type="number" class="inp-field" id="inp-w" value="1024" min="64" max="4096" step="64" style="flex:1;text-align:center">
-            <span style="color:var(--muted)">×</span>
-            <input type="number" class="inp-field" id="inp-h" value="1024" min="64" max="4096" step="64" style="flex:1;text-align:center">
-          </div>
-          <div class="inp-ratio-grid">
-            <button class="inp-rbtn" id="inp-auto-ratio">🎯 Auto</button>
-            <button class="inp-rbtn" data-w="1152" data-h="768">3:2</button>
-            <button class="inp-rbtn" data-w="768"  data-h="1152">2:3</button>
-            <button class="inp-rbtn" data-w="1344" data-h="768">16:9</button>
-            <button class="inp-rbtn" data-w="768"  data-h="1344">9:16</button>
-            <button class="inp-rbtn" data-w="1024" data-h="1024">1:1</button>
-          </div>
-        </div>
-      </div>
-
-      <!-- Prompts -->
-      <div class="inp-sec">
-        <div class="inp-sec-hdr">Prompts <span class="arrow">▼</span></div>
-        <div class="inp-sec-body">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:2px">
-            <label style="font-size:10px;color:var(--muted)">Positive</label>
-            <button onclick="CharSelector.toggleFor('inp-prompt')" class="cs-toggle-btn" style="font-size:10px;padding:2px 7px">Characters</button>
-          </div>
-          <textarea class="inp-ta" id="inp-prompt" rows="4" placeholder="Positive prompt…"></textarea>
-          <label style="font-size:10px;color:var(--muted);margin:6px 0 2px;display:block">Negative</label>
-          <textarea class="inp-ta" id="inp-neg"    rows="2" placeholder="Negative…"></textarea>
-        </div>
-      </div>
-
-      <!-- Generate -->
-      <div class="inp-sec">
-        <div id="inp-pbar-wrap"><div id="inp-pbar"></div></div>
-        <div id="inp-status"></div>
-        <div style="display:flex;gap:6px">
-          <button id="inp-gen-btn" style="flex:1">▶ Generate</button>
-          <button id="inp-clear-history" class="inp-btn-sm inp-btn-danger" title="Clear history">🗑</button>
-        </div>
-        <div id="inp-results"></div>
-      </div>
-
-    </div><!-- /inp-sidebar -->
+    </div><!-- /inp-bottom -->
 
   </div><!-- /view-inpaint -->
 
@@ -574,8 +615,9 @@
         <button class="sws-btn" id="sws-btn-connect">⟳ Connect</button>
         <button class="sws-btn sm" id="sws-btn-reset">↺ Reset</button>
         <button class="sws-btn sm" id="sws-btn-cleardone">🗑 Clear done</button>
-        <button class="sws-btn sm" id="sws-btn-save">💾</button>
-        <button class="sws-btn sm" id="sws-btn-load">📂</button>
+        <button class="sws-btn sm" id="sws-btn-task-presets">📁 Task Presets</button>
+        <button class="sws-btn sm" id="sws-btn-save" title="Export queue as JSON">💾</button>
+        <button class="sws-btn sm" id="sws-btn-load" title="Import queue from JSON">📂</button>
         <input type="file" id="sws-file" accept=".json" style="display:none">
       </div>
 
@@ -598,15 +640,233 @@
       </div>
     </div>
 
-    <!-- Right column: gallery -->
+    <!-- Right column: gallery + inline editor -->
     <div id="sws-right">
-      <div class="sws-gallery-wrap">
-        <div class="sws-gallery-hdr">
-          <span>Generated</span>
-          <button class="sws-btn sm" id="sws-gal-clear">Clear</button>
+
+      <!-- Gallery panel (default) -->
+      <div id="sws-right-gallery">
+        <div class="sws-gallery-wrap">
+          <div class="sws-gallery-hdr">
+            <span>Generated</span>
+            <div style="display:flex;gap:5px">
+              <button class="sws-btn sm" id="sws-gal-dl-all" title="Download all images as ZIP">⬇ All</button>
+              <button class="sws-btn sm" id="sws-gal-clear">🗑 Clear</button>
+            </div>
+          </div>
+          <div id="sws-gallery"><div class="sws-gal-empty">Images will appear here</div></div>
         </div>
-        <div id="sws-gallery"><div class="sws-gal-empty">Images will appear here</div></div>
       </div>
+
+      <!-- Inline task editor (shown when adding/editing a task) -->
+      <div id="sws-right-editor">
+        <div class="sws-editor-head">
+          <span id="sws-modal-title">Add Task</span>
+          <button class="sws-modal-close" id="sws-modal-close">×</button>
+        </div>
+        <div class="sws-editor-body">
+          <input type="hidden" id="sws-edit-id">
+          <div class="sws-fg">
+            <label class="sws-lbl">Group <span style="font-weight:400;text-transform:none">(optional)</span></label>
+            <input class="sws-inp" id="sws-f-group" placeholder="e.g. Portraits, Tests…" list="sws-group-list" autocomplete="off">
+            <datalist id="sws-group-list"></datalist>
+          </div>
+          <div class="sws-fg">
+            <label class="sws-lbl">Task Name</label>
+            <input class="sws-inp" id="sws-f-name" placeholder="My generation task">
+          </div>
+          <div class="sws-fg">
+            <div style="display:flex;justify-content:space-between;align-items:center">
+              <label class="sws-lbl">Prompt</label>
+              <button onclick="CharSelector.toggleFor('sws-f-prompt')" class="cs-toggle-btn" style="font-size:10px;padding:2px 7px">Characters</button>
+            </div>
+            <textarea class="sws-ta" id="sws-f-prompt" rows="4" placeholder="masterpiece, best quality, 1girl, ..."></textarea>
+          </div>
+          <div class="sws-fg">
+            <label class="sws-lbl">Negative Prompt</label>
+            <textarea class="sws-ta" id="sws-f-neg" rows="2" placeholder="nsfw, blurry, bad anatomy, ..."></textarea>
+          </div>
+          <div class="sws-fg">
+            <label class="sws-lbl">Model</label>
+            <select class="sws-sel" id="sws-f-model">
+              <option value="">— Connect first to load models —</option>
+            </select>
+          </div>
+          <div class="sws-row2">
+            <div class="sws-fg">
+              <label class="sws-lbl">Steps</label>
+              <input class="sws-inp" type="number" id="sws-f-steps" value="20" min="1" max="150">
+            </div>
+            <div class="sws-fg">
+              <label class="sws-lbl">CFG Scale</label>
+              <input class="sws-inp" type="number" id="sws-f-cfg" value="7" min="1" max="30" step="0.5">
+            </div>
+          </div>
+          <div class="sws-row2">
+            <div class="sws-fg">
+              <label class="sws-lbl">Aspect Ratio</label>
+              <select class="sws-sel" id="sws-f-ratio">
+                <option value="1:1">1:1 Square (1024×1024)</option>
+                <option value="4:3">4:3 Landscape (1152×896)</option>
+                <option value="3:2">3:2 Landscape (1216×832)</option>
+                <option value="16:9">16:9 Wide (1344×768)</option>
+                <option value="21:9">21:9 Ultrawide (1536×640)</option>
+                <option value="3:4">3:4 Portrait (896×1152)</option>
+                <option value="2:3">2:3 Portrait (832×1216)</option>
+                <option value="9:16">9:16 Tall (768×1344)</option>
+                <option value="custom">Custom</option>
+              </select>
+            </div>
+            <div class="sws-fg">
+              <label class="sws-lbl">Image Count</label>
+              <input class="sws-inp" type="number" id="sws-f-count" value="4" min="1" max="200">
+            </div>
+          </div>
+          <div class="sws-custom-dims" id="sws-custom-dims">
+            <div class="sws-fg" style="margin:0">
+              <label class="sws-lbl">Width</label>
+              <input class="sws-inp" type="number" id="sws-f-w" value="1024" step="64" min="64">
+            </div>
+            <div class="sws-dim-sep">×</div>
+            <div class="sws-fg" style="margin:0">
+              <label class="sws-lbl">Height</label>
+              <input class="sws-inp" type="number" id="sws-f-h" value="1024" step="64" min="64">
+            </div>
+          </div>
+          <div class="sws-row2" style="margin-top:10px">
+            <div class="sws-fg">
+              <label class="sws-lbl">Seed <span style="font-weight:400;text-transform:none">(-1 = random)</span></label>
+              <input class="sws-inp" type="number" id="sws-f-seed" value="-1">
+            </div>
+            <div class="sws-fg">
+              <label class="sws-lbl">Sampler <span style="font-weight:400;text-transform:none">(optional)</span></label>
+              <input class="sws-inp" id="sws-f-sampler" placeholder="e.g. euler, dpmpp_2m">
+            </div>
+          </div>
+          <!-- LoRAs -->
+          <div class="sws-cn-section" style="margin-top:4px">
+            <div class="sws-cn-toggle" id="sws-lora-toggle">
+              <span class="sws-cn-label">LoRAs <span id="sws-lora-count" style="font-size:10px;color:var(--muted);font-weight:400;text-transform:none"></span></span>
+              <span style="font-size:10px;color:var(--muted)" id="sws-lora-arrow">▶</span>
+            </div>
+            <div class="sws-cn-body" id="sws-lora-body">
+              <div id="sws-lora-list"></div>
+              <button class="sws-btn sm" id="sws-lora-add" style="width:100%;margin-top:4px;justify-content:center">+ Add LoRA</button>
+            </div>
+          </div>
+          <!-- ControlNet -->
+          <div class="sws-cn-section">
+            <div class="sws-cn-toggle" id="sws-cn-toggle">
+              <input type="checkbox" id="sws-f-cn-enabled" style="accent-color:var(--accent);cursor:pointer">
+              <span class="sws-cn-label">ControlNet</span>
+              <span style="font-size:10px;color:var(--muted)" id="sws-cn-arrow">▶</span>
+            </div>
+            <div class="sws-cn-body" id="sws-cn-body">
+              <div class="sws-fg">
+                <label class="sws-lbl">CN Model</label>
+                <select class="sws-sel" id="sws-f-cn-model"><option value="">— Connect first to load CN models —</option></select>
+              </div>
+              <div class="sws-row2">
+                <div class="sws-fg">
+                  <label class="sws-lbl">Preprocessor</label>
+                  <select class="sws-sel" id="sws-f-cn-type">
+                    <option value="none">None (raw image)</option>
+                    <option value="canny">Canny</option>
+                    <option value="depth">Depth (MiDaS)</option>
+                    <option value="openpose">OpenPose</option>
+                    <option value="lineart">Lineart</option>
+                    <option value="softedge">SoftEdge (HED)</option>
+                    <option value="scribble">Scribble</option>
+                    <option value="normalmap">Normal Map</option>
+                    <option value="segmentation">Segmentation</option>
+                    <option value="tile">Tile / Upscale</option>
+                  </select>
+                </div>
+                <div class="sws-fg">
+                  <label class="sws-lbl">Strength</label>
+                  <input class="sws-inp" type="number" id="sws-f-cn-strength" value="1" min="0" max="2" step="0.05">
+                </div>
+              </div>
+              <div class="sws-row2">
+                <div class="sws-fg">
+                  <label class="sws-lbl">Start %</label>
+                  <input class="sws-inp" type="number" id="sws-f-cn-start" value="0" min="0" max="1" step="0.05">
+                </div>
+                <div class="sws-fg">
+                  <label class="sws-lbl">End %</label>
+                  <input class="sws-inp" type="number" id="sws-f-cn-end" value="1" min="0" max="1" step="0.05">
+                </div>
+              </div>
+              <div class="sws-fg">
+                <label class="sws-lbl">Control Image</label>
+                <div class="sws-cn-dropzone" id="sws-cn-dropzone">
+                  <span id="sws-cn-drop-label">Click or drop an image</span>
+                  <button class="sws-cn-clear-btn" id="sws-cn-clear-btn" style="display:none" title="Remove image">✕</button>
+                </div>
+                <input type="file" id="sws-f-cn-file" accept="image/*" style="display:none">
+                <img class="sws-cn-img-preview" id="sws-cn-preview" alt="preview">
+              </div>
+            </div>
+          </div>
+          <!-- Hires Fix -->
+          <div class="sws-cn-section" style="margin-top:12px">
+            <div class="sws-cn-toggle" id="sws-hf-toggle">
+              <input type="checkbox" id="sws-f-hf-enabled" style="accent-color:var(--accent);cursor:pointer">
+              <span class="sws-cn-label">Hires Fix</span>
+              <span style="font-size:10px;color:var(--muted)" id="sws-hf-arrow">▶</span>
+            </div>
+            <div class="sws-cn-body" id="sws-hf-body">
+              <div class="sws-fg">
+                <label class="sws-lbl">Refiner model <span style="font-weight:400;text-transform:none">(optional)</span></label>
+                <select class="sws-sel" id="sws-f-hf-model"><option value="">— Same as main —</option></select>
+              </div>
+              <div class="sws-fg">
+                <label class="sws-lbl">Upscale method</label>
+                <select class="sws-sel" id="sws-f-hf-method">
+                  <option value="pixel-lanczos">Pixel — Lanczos</option>
+                  <option value="pixel-bicubic">Pixel — Bicubic</option>
+                  <option value="pixel-bilinear">Pixel — Bilinear</option>
+                  <option value="pixel-nearest">Pixel — Nearest</option>
+                  <option value="model-remacri_original.pth" selected>Model — remacri_original</option>
+                  <option value="model-4x-UltraSharp.pth">Model — 4x-UltraSharp</option>
+                  <option value="model-ESRGAN_4x.pth">Model — ESRGAN_4x</option>
+                </select>
+              </div>
+              <div class="sws-row2">
+                <div class="sws-fg">
+                  <label class="sws-lbl">Upscale</label>
+                  <input class="sws-inp" type="number" id="sws-f-hf-scale" value="1.5" min="1" max="4" step="0.05">
+                </div>
+                <div class="sws-fg">
+                  <label class="sws-lbl">Switch at %</label>
+                  <input class="sws-inp" type="number" id="sws-f-hf-pct" value="0.2" min="0" max="1" step="0.05">
+                </div>
+              </div>
+              <div class="sws-row2">
+                <div class="sws-fg">
+                  <label class="sws-lbl">Steps</label>
+                  <input class="sws-inp" type="number" id="sws-f-hf-steps" value="10" min="1" max="60">
+                </div>
+                <div class="sws-fg">
+                  <label class="sws-lbl">CFG Scale</label>
+                  <input class="sws-inp" type="number" id="sws-f-hf-cfg" value="7" min="1" max="20" step="0.5">
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- Quick Preview -->
+          <div class="sws-qp-section">
+            <div class="sws-qp-bar-wrap" id="sws-qp-bar-wrap"><div id="sws-qp-bar"></div></div>
+            <div class="sws-qp-status" id="sws-qp-status"></div>
+            <img id="sws-qp-img" class="sws-qp-img" style="display:none" alt="Quick preview">
+          </div>
+        </div>
+        <div class="sws-editor-foot">
+          <button class="sws-btn" id="sws-modal-cancel">Cancel</button>
+          <button class="sws-btn" id="sws-qp-btn">🔍 Preview</button>
+          <button class="sws-btn primary" id="sws-modal-save">Save Task</button>
+        </div>
+      </div>
+
     </div>
 
   </div><!-- /view-scheduler -->
@@ -643,197 +903,49 @@
     </div>
   </div><!-- /view-pnginfo -->
 
-  <!-- Scheduler modals -->
-  <div class="sws-overlay" id="sws-modal">
-    <div class="sws-modal">
-      <div class="sws-modal-head">
-        <span id="sws-modal-title">Add Task</span>
-        <button class="sws-modal-close" id="sws-modal-close">×</button>
-      </div>
-      <div class="sws-modal-body">
-        <input type="hidden" id="sws-edit-id">
-        <div class="sws-fg">
-          <label class="sws-lbl">Group <span style="font-weight:400;text-transform:none">(optional)</span></label>
-          <input class="sws-inp" id="sws-f-group" placeholder="e.g. Portraits, Tests…" list="sws-group-list" autocomplete="off">
-          <datalist id="sws-group-list"></datalist>
-        </div>
-        <div class="sws-fg">
-          <label class="sws-lbl">Task Name</label>
-          <input class="sws-inp" id="sws-f-name" placeholder="My generation task">
-        </div>
-        <div class="sws-fg">
-          <div style="display:flex;justify-content:space-between;align-items:center">
-            <label class="sws-lbl">Prompt</label>
-            <button onclick="CharSelector.toggleFor('sws-f-prompt')" class="cs-toggle-btn" style="font-size:10px;padding:2px 7px">Characters</button>
-          </div>
-          <textarea class="sws-ta" id="sws-f-prompt" rows="4" placeholder="masterpiece, best quality, 1girl, ..."></textarea>
-        </div>
-        <div class="sws-fg">
-          <label class="sws-lbl">Negative Prompt</label>
-          <textarea class="sws-ta" id="sws-f-neg" rows="2" placeholder="nsfw, blurry, bad anatomy, ..."></textarea>
-        </div>
-        <div class="sws-fg">
-          <label class="sws-lbl">Model</label>
-          <select class="sws-sel" id="sws-f-model">
-            <option value="">— Connect first to load models —</option>
-          </select>
-        </div>
-        <div class="sws-row2">
-          <div class="sws-fg">
-            <label class="sws-lbl">Steps</label>
-            <input class="sws-inp" type="number" id="sws-f-steps" value="20" min="1" max="150">
-          </div>
-          <div class="sws-fg">
-            <label class="sws-lbl">CFG Scale</label>
-            <input class="sws-inp" type="number" id="sws-f-cfg" value="7" min="1" max="30" step="0.5">
-          </div>
-        </div>
-        <div class="sws-row2">
-          <div class="sws-fg">
-            <label class="sws-lbl">Aspect Ratio</label>
-            <select class="sws-sel" id="sws-f-ratio">
-              <option value="1:1">1:1 Square (1024×1024)</option>
-              <option value="4:3">4:3 Landscape (1152×896)</option>
-              <option value="3:2">3:2 Landscape (1216×832)</option>
-              <option value="16:9">16:9 Wide (1344×768)</option>
-              <option value="21:9">21:9 Ultrawide (1536×640)</option>
-              <option value="3:4">3:4 Portrait (896×1152)</option>
-              <option value="2:3">2:3 Portrait (832×1216)</option>
-              <option value="9:16">9:16 Tall (768×1344)</option>
-              <option value="custom">Custom</option>
-            </select>
-          </div>
-          <div class="sws-fg">
-            <label class="sws-lbl">Image Count</label>
-            <input class="sws-inp" type="number" id="sws-f-count" value="4" min="1" max="200">
-          </div>
-        </div>
-        <div class="sws-custom-dims" id="sws-custom-dims">
-          <div class="sws-fg" style="margin:0">
-            <label class="sws-lbl">Width</label>
-            <input class="sws-inp" type="number" id="sws-f-w" value="1024" step="64" min="64">
-          </div>
-          <div class="sws-dim-sep">×</div>
-          <div class="sws-fg" style="margin:0">
-            <label class="sws-lbl">Height</label>
-            <input class="sws-inp" type="number" id="sws-f-h" value="1024" step="64" min="64">
-          </div>
-        </div>
-        <div class="sws-row2" style="margin-top:10px">
-          <div class="sws-fg">
-            <label class="sws-lbl">Seed <span style="font-weight:400;text-transform:none">(-1 = random)</span></label>
-            <input class="sws-inp" type="number" id="sws-f-seed" value="-1">
-          </div>
-          <div class="sws-fg">
-            <label class="sws-lbl">Sampler <span style="font-weight:400;text-transform:none">(optional)</span></label>
-            <input class="sws-inp" id="sws-f-sampler" placeholder="e.g. euler, dpmpp_2m">
-          </div>
-        </div>
-        <!-- ControlNet -->
-        <div class="sws-cn-section">
-          <div class="sws-cn-toggle" id="sws-cn-toggle">
-            <input type="checkbox" id="sws-f-cn-enabled" style="accent-color:var(--accent);cursor:pointer">
-            <span class="sws-cn-label">ControlNet</span>
-            <span style="font-size:10px;color:var(--muted)" id="sws-cn-arrow">▶</span>
-          </div>
-          <div class="sws-cn-body" id="sws-cn-body">
-            <div class="sws-fg">
-              <label class="sws-lbl">CN Model</label>
-              <select class="sws-sel" id="sws-f-cn-model"><option value="">— Connect first to load CN models —</option></select>
-            </div>
-            <div class="sws-row2">
-              <div class="sws-fg">
-                <label class="sws-lbl">Preprocessor</label>
-                <select class="sws-sel" id="sws-f-cn-type">
-                  <option value="none">None (raw image)</option>
-                  <option value="canny">Canny</option>
-                  <option value="depth">Depth (MiDaS)</option>
-                  <option value="openpose">OpenPose</option>
-                  <option value="lineart">Lineart</option>
-                  <option value="softedge">SoftEdge (HED)</option>
-                  <option value="scribble">Scribble</option>
-                  <option value="normalmap">Normal Map</option>
-                  <option value="segmentation">Segmentation</option>
-                  <option value="tile">Tile / Upscale</option>
-                </select>
-              </div>
-              <div class="sws-fg">
-                <label class="sws-lbl">Strength</label>
-                <input class="sws-inp" type="number" id="sws-f-cn-strength" value="1" min="0" max="2" step="0.05">
-              </div>
-            </div>
-            <div class="sws-row2">
-              <div class="sws-fg">
-                <label class="sws-lbl">Start %</label>
-                <input class="sws-inp" type="number" id="sws-f-cn-start" value="0" min="0" max="1" step="0.05">
-              </div>
-              <div class="sws-fg">
-                <label class="sws-lbl">End %</label>
-                <input class="sws-inp" type="number" id="sws-f-cn-end" value="1" min="0" max="1" step="0.05">
-              </div>
-            </div>
-            <div class="sws-fg">
-              <label class="sws-lbl">Control Image</label>
-              <input class="sws-inp" id="sws-f-cn-imgurl" placeholder="Click to load image…" readonly style="cursor:pointer" onclick="document.getElementById('sws-f-cn-file').click()">
-              <input type="file" id="sws-f-cn-file" accept="image/*" style="display:none">
-              <img class="sws-cn-img-preview" id="sws-cn-preview" alt="preview">
-            </div>
-          </div>
-        </div>
+  <!-- ── Watermark view ─────────────────────────────────────────────────────── -->
+  <div id="view-watermark">
 
-        <!-- Hires Fix -->
-        <div class="sws-cn-section" style="margin-top:12px">
-          <div class="sws-cn-toggle" id="sws-hf-toggle">
-            <input type="checkbox" id="sws-f-hf-enabled" style="accent-color:var(--accent);cursor:pointer">
-            <span class="sws-cn-label">Hires Fix</span>
-            <span style="font-size:10px;color:var(--muted)" id="sws-hf-arrow">▶</span>
-          </div>
-          <div class="sws-cn-body" id="sws-hf-body">
-            <div class="sws-fg">
-              <label class="sws-lbl">Refiner model <span style="font-weight:400;text-transform:none">(optional)</span></label>
-              <select class="sws-sel" id="sws-f-hf-model"><option value="">— Same as main —</option></select>
-            </div>
-            <div class="sws-fg">
-              <label class="sws-lbl">Upscale method</label>
-              <select class="sws-sel" id="sws-f-hf-method">
-                <option value="pixel-lanczos">Pixel — Lanczos</option>
-                <option value="pixel-bicubic">Pixel — Bicubic</option>
-                <option value="pixel-bilinear">Pixel — Bilinear</option>
-                <option value="pixel-nearest">Pixel — Nearest</option>
-                <option value="model-remacri_original.pth" selected>Model — RealESRGAN Remacri</option>
-                <option value="model-4x-UltraSharp.pth">Model — 4x UltraSharp</option>
-                <option value="model-ESRGAN_4x.pth">Model — ESRGAN 4x</option>
-              </select>
-            </div>
-            <div class="sws-row2">
-              <div class="sws-fg">
-                <label class="sws-lbl">Upscale</label>
-                <input class="sws-inp" type="number" id="sws-f-hf-scale" value="1.5" min="1" max="4" step="0.05">
-              </div>
-              <div class="sws-fg">
-                <label class="sws-lbl">Switch at %</label>
-                <input class="sws-inp" type="number" id="sws-f-hf-pct" value="0.2" min="0" max="1" step="0.05">
-              </div>
-            </div>
-            <div class="sws-row2">
-              <div class="sws-fg">
-                <label class="sws-lbl">Steps</label>
-                <input class="sws-inp" type="number" id="sws-f-hf-steps" value="10" min="1" max="60">
-              </div>
-              <div class="sws-fg">
-                <label class="sws-lbl">CFG Scale</label>
-                <input class="sws-inp" type="number" id="sws-f-hf-cfg" value="7" min="1" max="20" step="0.5">
-              </div>
-            </div>
+    <div id="wm-toolbar">
+      <button class="wm-tbtn" id="wm-load-wm">💧 Load Watermark</button>
+      <span id="wm-wm-status" class="wm-status-label"></span>
+      <button class="wm-tbtn wm-tbtn-danger" id="wm-clear-wm" style="display:none">✕</button>
+      <input type="file" id="wm-wm-file-input" accept="image/*,.kra" style="display:none">
+      <span class="wm-sep"></span>
+      <label class="wm-tlbl">Opacity <span id="wm-opacity-val">80%</span></label>
+      <input type="range" id="wm-opacity" min="0" max="1" step="0.01" value="0.8">
+      <label class="wm-tlbl">Scale <span id="wm-scale-val">1.00×</span></label>
+      <input type="range" id="wm-scale" min="0.1" max="3" step="0.05" value="1">
+      <span class="wm-sep"></span>
+      <button class="wm-tbtn wm-tbtn-primary" id="wm-export">⬇ Export PNG</button>
+    </div>
+
+    <div id="wm-body">
+
+      <div id="wm-drop-zone">
+        <svg width="52" height="52" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" opacity=".4">
+          <rect x="3" y="3" width="18" height="18" rx="2"/>
+          <path d="M3 15l5-5 4 4 3-3 6 6"/>
+          <circle cx="8.5" cy="8.5" r="1.5"/>
+        </svg>
+        <p>Glisse une image ici</p>
+        <p style="font-size:11px;color:var(--muted)">ou</p>
+        <button class="wm-tbtn" id="wm-load-base">Choisir un fichier</button>
+        <input type="file" id="wm-file-input" accept="image/*" style="display:none">
+      </div>
+
+      <div id="wm-canvas-area">
+        <div id="wm-canvas-wrap">
+          <img id="wm-base-img" alt="Base image">
+          <div id="wm-overlay-wrap">
+            <img id="wm-overlay" alt="Watermark">
           </div>
         </div>
       </div>
-      <div class="sws-modal-foot">
-        <button class="sws-btn" id="sws-modal-cancel">Cancel</button>
-        <button class="sws-btn primary" id="sws-modal-save">Save Task</button>
-      </div>
+
     </div>
-  </div>
+
+  </div><!-- /view-watermark -->
 
   <!-- Preset picker modal -->
   <div class="sws-overlay" id="sws-preset-modal">
@@ -849,6 +961,23 @@
     </div>
   </div>
 
+  <!-- Task Presets modal -->
+  <div class="sws-overlay" id="sws-tp-modal">
+    <div class="sws-modal" style="max-width:500px">
+      <div class="sws-modal-head">
+        <span>📁 Task Presets</span>
+        <button class="sws-modal-close" id="sws-tp-close">×</button>
+      </div>
+      <div class="sws-tp-save-row">
+        <input class="sws-tp-name-inp" id="sws-tp-name" placeholder="Name this preset…" maxlength="60">
+        <button class="sws-btn primary" id="sws-tp-save-btn">💾 Save current queue</button>
+      </div>
+      <div class="sws-preset-list" id="sws-tp-list">
+        <div class="sws-preset-empty">No saved task presets yet.</div>
+      </div>
+    </div>
+  </div>
+
   <!-- Lightbox -->
   <div class="sws-lb" id="sws-lb">
     <img id="sws-lb-img" alt="">
@@ -858,6 +987,8 @@
   <!-- Scheduler gallery context menu -->
   <div id="sws-gal-ctx">
     <div class="sws-ctx-item" id="sws-ctx-inpaint">🖌 Send to Inpaint</div>
+    <div class="sws-ctx-item" id="sws-ctx-watermark">💧 Send to Watermark</div>
+    <div class="sws-ctx-item" id="sws-ctx-img2vid">🎬 Send to Img2Vid</div>
     <div class="sws-ctx-item" id="sws-ctx-open">🔍 Open fullscreen</div>
     <div class="sws-ctx-item" id="sws-ctx-dl">⬇ Download</div>
   </div>
@@ -868,8 +999,12 @@
   <!-- Inpaint context menu -->
   <div id="inp-ctx-menu">
     <div class="inp-ctx-item" id="inp-ctx-use">🖼 Use as init image</div>
+    <div class="inp-ctx-item" id="inp-ctx-watermark">💧 Send to Watermark</div>
+    <div class="inp-ctx-item" id="inp-ctx-img2vid">🎬 Send to Img2Vid</div>
     <div class="inp-ctx-item" id="inp-ctx-dl">⬇ Download</div>
   </div>
+
+
 
 </div><!-- /app -->
 
@@ -920,18 +1055,294 @@
   </div>
 </div>
 
+  <!-- ── Img2Vid view ──────────────────────────────────────────────────────── -->
+  <div id="view-img2vid">
+
+    <!-- Left panel: image + settings -->
+    <div id="i2v-left">
+
+      <!-- Image area -->
+      <div id="i2v-image-area">
+        <div id="i2v-drop-zone">
+          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" style="opacity:.4;margin-bottom:8px">
+            <rect x="3" y="3" width="18" height="18" rx="2"/>
+            <circle cx="8.5" cy="8.5" r="1.5"/>
+            <path d="M3 15l5-5 4 4 3-3 6 6"/>
+          </svg>
+          <span style="font-size:12px;color:var(--muted)">Drop image, paste, or</span>
+          <button id="i2v-drop-btn" class="btn-secondary" style="margin-top:6px;padding:4px 12px">Browse…</button>
+          <input type="file" id="i2v-file-input" accept="image/*" style="display:none">
+        </div>
+        <div id="i2v-thumb-sec" style="display:none">
+          <img id="i2v-preview-img" alt="source image">
+          <button id="i2v-clear-btn" title="Clear image">✕</button>
+        </div>
+      </div>
+
+      <!-- Settings (scrollable) -->
+      <div id="i2v-settings">
+
+        <!-- Prompt -->
+        <div class="field">
+          <div class="field-label">Prompt</div>
+          <textarea class="inp" id="i2v-prompt" rows="3" style="resize:vertical;min-height:56px;user-select:text" placeholder="Describe the motion… (e.g. slow wind, gentle waves)"></textarea>
+        </div>
+
+        <!-- Negative -->
+        <div class="field">
+          <div class="field-label">Negative prompt</div>
+          <textarea class="inp" id="i2v-neg" rows="2" style="resize:vertical;min-height:40px;user-select:text" placeholder="fast movements, blurry, static…"></textarea>
+        </div>
+
+        <!-- Resolution -->
+        <div class="field">
+          <div class="field-label">Resolution</div>
+          <select class="inp" id="i2v-resolution">
+            <option value="832x480">832 × 480 — 16:9 landscape</option>
+            <option value="480x832">480 × 832 — 9:16 portrait</option>
+            <option value="1280x720">1280 × 720 — 720p landscape</option>
+            <option value="720x1280">720 × 1280 — 720p portrait</option>
+            <option value="880x480">880 × 480 — wide landscape</option>
+            <option value="480x880">480 × 880 — tall portrait</option>
+            <option value="880x1120" selected>880 × 1120 — WAN default portrait</option>
+            <option value="1120x880">1120 × 880 — WAN default landscape</option>
+          </select>
+        </div>
+
+        <!-- Duration -->
+        <div class="field">
+          <div class="field-label">Duration (seconds) <span id="i2v-dur-val">3</span>s</div>
+          <input type="range" id="i2v-dur" class="slider" min="1" max="10" step="1" value="3">
+        </div>
+
+        <!-- Steps -->
+        <div class="field" id="i2v-steps-group">
+          <div class="field-label">Steps <span id="i2v-steps-val">20</span></div>
+          <input type="range" id="i2v-steps" class="slider" min="5" max="50" step="1" value="20">
+        </div>
+
+        <!-- CFG -->
+        <div class="field">
+          <div class="field-label">CFG <span id="i2v-cfg-val">6</span></div>
+          <input type="range" id="i2v-cfg" class="slider" min="1" max="12" step="0.5" value="6">
+        </div>
+
+        <!-- FPS + Sampler row -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div class="field">
+            <div class="field-label">FPS</div>
+            <select class="inp" id="i2v-fps">
+              <option value="6" selected>6 fps</option>
+              <option value="8">8 fps</option>
+              <option value="16">16 fps</option>
+              <option value="24">24 fps</option>
+            </select>
+          </div>
+          <div class="field">
+            <div class="field-label">Sampler</div>
+            <select class="inp" id="i2v-sampler">
+              <option value="euler" selected>euler</option>
+              <option value="dpm_2">dpm_2</option>
+              <option value="dpm_2_ancestral">dpm_2a</option>
+              <option value="uni_pc">uni_pc</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Scheduler -->
+        <div class="field">
+          <div class="field-label">Scheduler</div>
+          <select class="inp" id="i2v-scheduler">
+            <option value="simple" selected>simple</option>
+            <option value="normal">normal</option>
+            <option value="karras">karras</option>
+            <option value="sgm_uniform">sgm_uniform</option>
+          </select>
+        </div>
+
+        <!-- Seed -->
+        <div class="field">
+          <div class="field-label">Seed</div>
+          <div class="seed-row">
+            <input type="number" class="inp" id="i2v-seed" value="-1" min="-1">
+            <button class="btn-sm" id="i2v-seed-reset" title="Reset to random">🎲</button>
+          </div>
+        </div>
+
+        <!-- Speed mode -->
+        <div class="field" style="display:flex;align-items:center;gap:8px;padding:6px 0">
+          <label class="i2v-toggle">
+            <input type="checkbox" id="i2v-speed-toggle">
+            <span class="i2v-toggle-track"></span>
+          </label>
+          <div>
+            <div style="font-size:12px;font-weight:600;color:var(--text2)">⚡ Speed mode</div>
+            <div style="font-size:11px;color:var(--muted)">Lightning Accelerator — 4 steps, faster</div>
+          </div>
+        </div>
+
+      </div><!-- /i2v-settings -->
+
+      <!-- Generate footer -->
+      <div id="i2v-gen-footer">
+        <div id="i2v-progress-wrap">
+          <div id="i2v-pbar"></div>
+        </div>
+        <div id="i2v-status"></div>
+        <button id="i2v-gen-btn" class="i2v-gen-btn" disabled>▶ Generate</button>
+      </div>
+
+    </div><!-- /i2v-left -->
+
+    <!-- Right panel: setup or output -->
+    <div id="i2v-right">
+
+      <!-- Setup required panel -->
+      <div id="i2v-setup-panel" style="display:none">
+        <div class="i2v-setup-inner">
+          <div style="font-size:24px;margin-bottom:8px">🎬</div>
+          <h3 style="margin-bottom:4px;font-size:14px">WAN 2.2 I2V Setup Required</h3>
+          <div id="i2v-setup-body" style="margin:12px 0;text-align:left;font-size:12px;color:var(--text2)">
+            Checking models…
+          </div>
+          <button id="i2v-setup-retry" class="btn-secondary" style="margin-top:8px">↻ Re-check</button>
+        </div>
+      </div>
+
+      <!-- Main output area -->
+      <div id="i2v-main">
+        <div id="i2v-output-placeholder">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" style="opacity:.2;margin-bottom:12px">
+            <polygon points="5 3 19 12 5 21 5 3"/>
+          </svg>
+          <span style="font-size:12px;color:var(--muted)">Video will appear here</span>
+        </div>
+        <video id="i2v-output-video" controls loop playsinline style="display:none;max-width:100%;max-height:100%;border-radius:6px"></video>
+        <div id="i2v-video-actions" style="display:none">
+          <button id="i2v-download-btn" class="btn-secondary">⬇ Download MP4</button>
+        </div>
+      </div>
+
+    </div><!-- /i2v-right -->
+
+  </div><!-- /view-img2vid -->
+
+  <!-- ── Model Downloader ──────────────────────────────────────────────────── -->
+  <div id="view-models">
+
+    <!-- Config bar -->
+    <div id="mdl-config-bar">
+      <button id="mdl-domain-toggle" class="mdl-domain-toggle" title="Basculer entre civitai.com (SFW) et civitai.red (NSFW)">civitai.com</button>
+      <span class="mdl-cfg-lbl">🔑</span>
+      <input type="password" id="mdl-api-key" class="mdl-cfg-inp" placeholder="API key…" style="width:180px">
+      <span class="mdl-cfg-lbl" style="margin-left:6px">📁</span>
+      <input type="text" id="mdl-base-path" class="mdl-cfg-inp mdl-cfg-grow" placeholder="D:\path\to\ComfyUI\models">
+      <button class="btn-secondary" id="mdl-browse-btn" style="font-size:11px;padding:3px 9px;flex-shrink:0">Browse</button>
+      <div id="mdl-status" class="mdl-status"></div>
+    </div>
+
+    <!-- Body -->
+    <div id="mdl-body">
+
+      <!-- Left panel: URL input + search -->
+      <div id="mdl-left">
+
+        <!-- Subtabs -->
+        <div class="mdl-subtabs">
+          <button class="mdl-subtab active" id="mdl-sub-url">🔗 Paste URL</button>
+          <button class="mdl-subtab" id="mdl-sub-search">🔍 Search</button>
+        </div>
+
+        <!-- URL pane -->
+        <div id="mdl-url-pane">
+          <div class="mdl-input-row">
+            <input type="text" id="mdl-url-input" class="mdl-big-inp"
+              placeholder="https://civitai.com/models/12345 …">
+            <button class="btn-primary" id="mdl-fetch-btn">Fetch</button>
+          </div>
+          <div class="mdl-url-hint">
+            Colle le lien CivitAI — type &amp; dossier détectés automatiquement
+          </div>
+        </div>
+
+        <!-- Search pane -->
+        <div id="mdl-search-pane" style="display:none">
+          <div class="mdl-input-row">
+            <input type="text" id="mdl-search-input" class="mdl-big-inp" placeholder="Search CivitAI…">
+            <button class="btn-primary" id="mdl-search-btn">Go</button>
+          </div>
+          <!-- Type filter (single-select) -->
+          <div class="mdl-filter-label">Type</div>
+          <div class="mdl-type-pills" id="mdl-type-pills">
+            <button class="mdl-type-pill active" data-type="all">All</button>
+            <button class="mdl-type-pill" data-type="Checkpoint">Checkpoint</button>
+            <button class="mdl-type-pill" data-type="LORA">LoRA</button>
+            <button class="mdl-type-pill" data-type="LoCon">LyCORIS</button>
+            <button class="mdl-type-pill" data-type="TextualInversion">Embedding</button>
+            <button class="mdl-type-pill" data-type="VAE">VAE</button>
+            <button class="mdl-type-pill" data-type="ControlNet">ControlNet</button>
+            <button class="mdl-type-pill" data-type="Upscaler">Upscaler</button>
+          </div>
+
+          <!-- Base model filter (multi-select) -->
+          <div class="mdl-filter-label" style="margin-top:6px">Base model <span style="font-weight:400;color:var(--muted);text-transform:none">(multi)</span></div>
+          <div class="mdl-type-pills" id="mdl-base-pills">
+            <button class="mdl-base-pill" data-base="Illustrious">Illustrious</button>
+            <button class="mdl-base-pill" data-base="Pony">Pony</button>
+            <button class="mdl-base-pill" data-base="SDXL 1.0">SDXL</button>
+            <button class="mdl-base-pill" data-base="SD 1.5">SD 1.5</button>
+            <button class="mdl-base-pill" data-base="SD 2.1">SD 2.1</button>
+            <button class="mdl-base-pill" data-base="Flux.1 D">Flux Dev</button>
+            <button class="mdl-base-pill" data-base="Flux.1 S">Flux Schnell</button>
+            <button class="mdl-base-pill" data-base="SD 3.5 Large">SD 3.5</button>
+            <button class="mdl-base-pill" data-base="Wan Video">WAN</button>
+          </div>
+
+          <select id="mdl-search-sort" class="mdl-sel" style="margin-top:6px">
+            <option value="Most Downloaded">Most Downloaded</option>
+            <option value="Highest Rated">Highest Rated</option>
+            <option value="Newest">Newest</option>
+            <option value="Most Discussed">Most Discussed</option>
+          </select>
+          <div id="mdl-results" class="mdl-results-grid"></div>
+        </div>
+
+      </div><!-- /mdl-left -->
+
+      <!-- Right panel: model card -->
+      <div id="mdl-right">
+        <div id="mdl-card" style="display:none">
+          <!-- populated by JS -->
+        </div>
+        <div id="mdl-empty-hint">
+          <div style="font-size:40px;margin-bottom:12px">📦</div>
+          <div style="font-weight:600;color:var(--text2);margin-bottom:6px">Aucun modèle sélectionné</div>
+          <div style="font-size:12px;color:var(--muted)">Colle une URL ou cherche un modèle à gauche</div>
+        </div>
+      </div><!-- /mdl-right -->
+
+    </div><!-- /mdl-body -->
+
+  </div><!-- /view-models -->
+
 <!-- Lightbox -->
 <div id="lightbox" class="hidden">
   <div id="lightbox-backdrop"></div>
   <img id="lightbox-img" src="" alt="">
   <button id="lightbox-close">✕</button>
+  <div id="lightbox-counter"></div>
 </div>
 
+<script src="src/jszip.min.js"></script>
 <script src="src/api.js"></script>
 <script src="src/tagcomplete.js"></script>
 <script src="src/charselector.js"></script>
+<script src="src/instances.js"></script>
+<script src="src/models.js"></script>
 <script src="src/inpaint.js"></script>
 <script src="src/scheduler.js"></script>
+<script src="src/watermark.js"></script>
+<script src="src/img2vid.js"></script>
 <script src="src/app.js"></script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, net } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path    = require('path');
 const fs      = require('fs').promises;
@@ -110,6 +110,77 @@ ipcMain.handle('char:tags', async () => {
 
 // ── IPC: thumbs loaded? ───────────────────────────────────────────────────────
 ipcMain.handle('char:thumbsReady', () => _charThumbs !== null);
+
+// ── IPC: model download ───────────────────────────────────────────────────────
+
+// Pick the ComfyUI "models" folder
+ipcMain.handle('models:pickFolder', async () => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title:      'Select your ComfyUI models folder',
+    message:    'Navigate to the "models" folder inside your ComfyUI installation',
+    properties: ['openDirectory'],
+  });
+  if (canceled || !filePaths.length) return null;
+  return filePaths[0];
+});
+
+// Download a file from URL → destPath, sending progress events back
+ipcMain.handle('models:download', async (event, { url, destPath }) => {
+  // Ensure directory exists
+  fsSync.mkdirSync(path.dirname(destPath), { recursive: true });
+
+  const tmpPath = destPath + '.tmp';
+
+  // Clean up any stale tmp file
+  try { fsSync.unlinkSync(tmpPath); } catch {}
+
+  return new Promise((resolve, reject) => {
+    const req = net.request({ url, redirect: 'follow' });
+
+    req.on('response', (res) => {
+      if (res.statusCode !== 200) {
+        reject(new Error(`Server returned ${res.statusCode} for ${url}`));
+        return;
+      }
+
+      const totalBytes = parseInt(res.headers['content-length'] || '0', 10);
+      let downloadedBytes = 0;
+      const file = fsSync.createWriteStream(tmpPath);
+
+      res.on('data', (chunk) => {
+        file.write(chunk);
+        downloadedBytes += chunk.length;
+        const pct = totalBytes > 0 ? Math.round((downloadedBytes / totalBytes) * 100) : -1;
+        // Send progress to renderer
+        try {
+          event.sender.send('models:progress', { destPath, downloadedBytes, totalBytes, pct });
+        } catch {}
+      });
+
+      res.on('end', () => {
+        file.end(() => {
+          try {
+            fsSync.renameSync(tmpPath, destPath);
+            resolve(destPath);
+          } catch (err) { reject(err); }
+        });
+      });
+
+      res.on('error', (err) => {
+        file.destroy();
+        try { fsSync.unlinkSync(tmpPath); } catch {}
+        reject(err);
+      });
+    });
+
+    req.on('error', (err) => {
+      try { fsSync.unlinkSync(tmpPath); } catch {}
+      reject(err);
+    });
+
+    req.end();
+  });
+});
 
 // ── Window ────────────────────────────────────────────────────────────────────
 function createWindow() {
