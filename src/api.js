@@ -44,6 +44,11 @@ const API = {
     return this.post('/API/ListT2IParams', { session_id: this.session });
   },
 
+  // ── Refresh model cache on disk ───────────────────────────────────────────────
+  async triggerRefresh(strong = true) {
+    return this.post('/API/TriggerRefresh', { session_id: this.session, strong });
+  },
+
   // ── Generate via WebSocket ────────────────────────────────────────────────────
   generate(payload, { onProgress, onPreview, onImage, onDone, onError } = {}) {
     if (this._ws) { try { this._ws.close(); } catch {} }

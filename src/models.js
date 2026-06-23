@@ -144,10 +144,22 @@ const ModelDL = (() => {
     return TYPE_FOLDER[type] || 'other';
   }
 
+  // Per-type subfolder override (persisted in localStorage)
+  function getSubfolder(type) {
+    return localStorage.getItem(`mdl-subfolder-${type}`) || subfolder(type);
+  }
+  function saveSubfolder(type, val) {
+    if (val) localStorage.setItem(`mdl-subfolder-${type}`, val);
+  }
+  // Read current value from the card input (falls back to stored/default)
+  function currentSubfolder(type) {
+    return q('mdl-subfolder-inp')?.value.trim() || getSubfolder(type);
+  }
+
   function destPath(file, type) {
     const base = getBasePath();
     const sep  = window.electronAPI?.platform === 'win32' ? '\\' : '/';
-    const sub  = subfolder(type);
+    const sub  = currentSubfolder(type);
     return [base, sub, file.name].join(sep);
   }
 
@@ -188,7 +200,7 @@ const ModelDL = (() => {
       ? `<button class="btn-primary mdl-btn-dl" id="mdl-btn-dl" ${!primary ? 'disabled' : ''}>
            ⬇ Download${primary ? ' — ' + fmtSize(primary.sizeKB) : ''}
          </button>`
-      : `<button class="btn-secondary mdl-btn-script" id="mdl-btn-script">📋 Copy PowerShell</button>`;
+      : `<button class="btn-secondary mdl-btn-script" id="mdl-btn-script">📋 Copy cmd script</button>`;
 
     card.innerHTML = `
       <div class="mdl-card-previews">${previews || '<div class="mdl-no-preview">🖼 No preview</div>'}</div>
@@ -208,8 +220,10 @@ const ModelDL = (() => {
         </div>
 
         <div class="mdl-dest-info">
-          <span class="mdl-lbl">Dossier auto-détecté</span>
-          <code class="mdl-dest-code">${esc(sub)}/</code>
+          <span class="mdl-lbl">Sous-dossier</span>
+          <input id="mdl-subfolder-inp" class="mdl-cfg-inp" value="${esc(getSubfolder(model.type))}"
+                 title="Modifie si ton dossier a un nom différent (ex: Lora au lieu de loras)" style="width:120px">
+          <span class="mdl-dest-slash">/</span>
         </div>
 
         <div class="mdl-files-list">${filesHtml}</div>
@@ -223,6 +237,11 @@ const ModelDL = (() => {
       </div>`;
 
     card.style.display = '';
+
+    // Subfolder override — persist per type on change
+    q('mdl-subfolder-inp')?.addEventListener('change', e => {
+      saveSubfolder(model.type, e.target.value.trim());
+    });
 
     // Version switch
     q('mdl-ver-sel')?.addEventListener('change', e => {
@@ -294,25 +313,26 @@ const ModelDL = (() => {
     }
   }
 
-  // ── PowerShell script (remote) ────────────────────────────────────────────────
+  // ── cmd.exe script (remote) ──────────────────────────────────────────────────
   function copyScript(file, model) {
     const apiKey  = getApiKey();
     const base    = getBasePath() || 'D:\\path\\to\\ComfyUI\\models';
-    const sub     = subfolder(model.type);
+    const sub     = currentSubfolder(model.type);
     const winBase = base.replace(/\//g, '\\');
     const url     = `${file.downloadUrl}${apiKey ? '?token=' + apiKey : ''}`;
+    const dest    = `${winBase}\\${sub}\\${file.name}`;
 
+    // cmd.exe compatible — works via SSH or Command Prompt
     const script = [
-      `# ${model.name} — ${_version?.name || ''}`,
-      `# Type: ${model.type}  →  ${sub}\\`,
-      `$base = "${winBase}"`,
-      `$dest = "$base\\${sub}\\${file.name}"`,
-      `New-Item -ItemType Directory -Force (Split-Path $dest) | Out-Null`,
-      `curl.exe -L --progress-bar -o $dest "${url}"`,
+      `@rem ${model.name} — ${_version?.name || ''}`,
+      `@rem Type: ${model.type}  →  ${sub}\\`,
+      `set "dest=${dest}"`,
+      `if not exist "${winBase}\\${sub}\\" mkdir "${winBase}\\${sub}"`,
+      `curl.exe -L --progress-bar -o "%dest%" "${url}"`,
     ].join('\n');
 
     navigator.clipboard.writeText(script).then(() => {
-      setStatus('📋 Script copié — colle-le dans PowerShell sur le serveur', 'success');
+      setStatus('📋 Script copié — colle-le dans cmd.exe sur le serveur', 'success');
     }).catch(() => {
       // Fallback: show in a textarea
       const ta = document.createElement('textarea');

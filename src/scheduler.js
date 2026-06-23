@@ -492,6 +492,12 @@ const Scheduler = (() => {
           payload.refinercfgscale          = hf.cfg    ?? 7;
           if (hf.model) payload.refinermodel = hf.model;
         }
+        if (task.type === 'inpaint' && task.inpaint?.image) {
+          payload.initimage            = task.inpaint.image;
+          payload.maskimage            = task.inpaint.mask;
+          payload.initimagecreativity  = task.inpaint.denoising ?? 0.75;
+          if (task.inpaint.maskMode === 'not_masked') payload.maskgrowamount = -1;
+        }
         ws.send(JSON.stringify(payload));
       };
 
@@ -878,6 +884,8 @@ const Scheduler = (() => {
       loras:      d.loras      || [],
       controlnet: d.controlnet || { enabled: false, model: '', type: 'none', strength: 1, start: 0, end: 1, image: null },
       hiresfix:   d.hiresfix   || { enabled: false, model: '', method: 'model-remacri_original.pth', scale: 1.5, pct: 0.2, steps: 10, cfg: 7 },
+      type:    d.type    || 'txt2img',
+      inpaint: d.inpaint || { image: null, mask: null, denoising: 0.75, maskMode: 'masked' },
     };
   }
 
@@ -1230,6 +1238,7 @@ const Scheduler = (() => {
                   <span class="sws-chip">🔢 ${t.steps}steps</span>
                   <span class="sws-chip">⚖ ${t.cfg}cfg</span>
                   ${t.model ? `<span class="sws-chip" title="${esc(t.model)}">🤖 ${esc(t.model.split('/').pop().slice(0,20))}</span>` : ''}
+                  ${t.type === 'inpaint'   ? `<span class="sws-chip" style="color:var(--accent)">🎨 INPAINT ×${t.inpaint?.denoising ?? 0.75}</span>` : ''}
                   ${t.controlnet?.enabled ? `<span class="sws-chip" style="color:var(--purple)">🎛 CN</span>` : ''}
                   ${t.hiresfix?.enabled   ? `<span class="sws-chip" style="color:var(--green)">⬆ HF×${t.hiresfix.scale}</span>` : ''}
                 </div>
@@ -1636,5 +1645,16 @@ const Scheduler = (() => {
     _filteredPresets:  null,
     _cnImage:          null,
     _clearCnImage:     null,
+    addInpaintTask(data) {
+      // data: { name, prompt, negative, model, steps, cfg, seed, count, loras,
+      //         inpaint: { image, mask, denoising, maskMode } }
+      const task = makeTask({ ...data, type: 'inpaint' });
+      S.tasks.push(task);
+      render();
+      // Switch to Scheduler tab
+      const tab = document.querySelector('.tab[data-tab="scheduler"]');
+      if (tab) tab.click();
+      return task;
+    },
   };
 })();

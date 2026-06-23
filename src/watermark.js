@@ -35,10 +35,24 @@ const Watermark = (() => {
       if (f) loadBaseFile(f);
     });
 
-    $('wm-load-base').addEventListener('click', () => $('wm-file-input').click());
+    // Both buttons (drop zone + toolbar) trigger the same file input
+    const openFilePicker = () => $('wm-file-input').click();
+    $('wm-load-base').addEventListener('click', openFilePicker);
+    $('wm-load-base-tb').addEventListener('click', openFilePicker);
     $('wm-file-input').addEventListener('change', e => {
       if (e.target.files[0]) loadBaseFile(e.target.files[0]);
       e.target.value = '';
+    });
+
+    // Also accept drag-drop on the canvas area (once an image is loaded)
+    const canvasArea = $('wm-canvas-area');
+    canvasArea.addEventListener('dragover',  e => { e.preventDefault(); canvasArea.classList.add('over'); });
+    canvasArea.addEventListener('dragleave', ()  => canvasArea.classList.remove('over'));
+    canvasArea.addEventListener('drop', e => {
+      e.preventDefault();
+      canvasArea.classList.remove('over');
+      const f = e.dataTransfer.files[0];
+      if (f && f.type.startsWith('image/')) loadBaseFile(f);
     });
 
     // Watermark file

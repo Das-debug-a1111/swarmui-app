@@ -345,6 +345,10 @@
     </div>
 
     <!-- Gallery -->
+    <div id="gallery-toolbar">
+      <span id="gallery-count" class="gallery-count"></span>
+      <button id="btn-dl-gallery" class="btn-secondary" title="Télécharger toutes les images de la session en ZIP" style="display:none">⬇ Télécharger la galerie</button>
+    </div>
     <div id="gallery">
       <div class="gallery-empty" id="gallery-empty">
         <div class="gallery-empty-icon">🎨</div>
@@ -407,7 +411,10 @@
       <div id="inp-results-panel">
         <div class="inp-panel-hdr">
           <span>Generated</span>
-          <button id="inp-clear-history" class="inp-btn-sm inp-btn-danger" title="Clear history">🗑</button>
+          <div style="display:flex;gap:4px">
+            <button id="inp-dl-history" class="inp-btn-sm" title="Télécharger toutes les images en ZIP" style="display:none">⬇</button>
+            <button id="inp-clear-history" class="inp-btn-sm inp-btn-danger" title="Clear history">🗑</button>
+          </div>
         </div>
         <div id="inp-pbar-wrap"><div id="inp-pbar"></div></div>
         <div id="inp-status"></div>
@@ -594,7 +601,10 @@
           </div>
           <div id="inp-lora-list" style="display:none;margin-top:3px"></div>
         </div>
-        <button id="inp-gen-btn" style="margin-top:6px">▶ Generate</button>
+        <div style="display:flex;gap:8px;margin-top:6px">
+          <button id="inp-gen-btn" style="flex:1">▶ Generate</button>
+          <button id="inp-sched-btn" title="Ajouter au Scheduler" style="padding:0 12px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;font-size:16px" >📅</button>
+        </div>
       </div>
 
     </div><!-- /inp-bottom -->
@@ -907,6 +917,7 @@
   <div id="view-watermark">
 
     <div id="wm-toolbar">
+      <button class="wm-tbtn" id="wm-load-base-tb">🖼 Image</button>
       <button class="wm-tbtn" id="wm-load-wm">💧 Load Watermark</button>
       <span id="wm-wm-status" class="wm-status-label"></span>
       <button class="wm-tbtn wm-tbtn-danger" id="wm-clear-wm" style="display:none">✕</button>
