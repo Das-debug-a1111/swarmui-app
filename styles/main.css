@@ -275,6 +275,13 @@ textarea.prompt::placeholder { color: var(--muted); }
   flex: 1; overflow-y: auto; padding: 12px 16px;
   display: flex; flex-direction: column; gap: 12px;
 }
+#gallery-toolbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 4px 8px; min-height: 28px; flex-shrink: 0;
+}
+.gallery-count { font-size: 11px; color: var(--muted); }
+#btn-dl-gallery { font-size: 11px; padding: 3px 10px; }
+
 .gallery-group-label {
   font-size: 10px; font-weight: 700; color: var(--muted); text-transform: uppercase;
   letter-spacing: .6px;
@@ -566,9 +573,12 @@ textarea.prompt::placeholder { color: var(--muted); }
   border: 2px dashed transparent;
   transition: border-color .15s, background .15s;
 }
-#wm-drop-zone.over {
+#wm-drop-zone.over,
+#wm-canvas-area.over {
   border-color: var(--accent);
   background: rgba(88,166,255,.05);
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
 }
 
 #wm-canvas-area {
@@ -1960,7 +1970,9 @@ body.cs-panel-open #view-scheduler.active {
 
 /* Version + destination rows */
 .mdl-version-row,
-.mdl-dest-info   { display: flex; align-items: center; gap: 8px; }
+.mdl-dest-info   { display: flex; align-items: center; gap: 6px; }
+.mdl-dest-slash  { color: var(--muted); font-size: 13px; }
+#mdl-subfolder-inp { font-family: monospace; font-size: 12px; }
 .mdl-lbl         { font-size: 11px; color: var(--muted); min-width: 80px; }
 .mdl-dest-code   {
   font-family: monospace;

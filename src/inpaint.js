@@ -26,6 +26,7 @@ const Inpaint = (() => {
     pendingWhole:     false, // kept for compat but unused with Forge
     originalMetadata: null,  // raw JSON metadata from the source image
     forgeOnline:      false,
+    _retryTimer:      null,
     _abort:           null,  // AbortController for in-flight Forge request
   };
 
@@ -335,6 +336,7 @@ const Inpaint = (() => {
       setForgeIndicator(true);
       hideOffline();
       setStatus('');
+      if (S._retryTimer) { clearInterval(S._retryTimer); S._retryTimer = null; }
     } catch (e) {
       S.forgeOnline = false;
       setForgeIndicator(false);
@@ -349,6 +351,17 @@ const Inpaint = (() => {
       // Show hint in the offline notice
       const noticeEl = q('inp-forge-offline')?.querySelector('.inp-forge-hint');
       if (noticeEl) noticeEl.textContent = hint;
+      // Retry automatique toutes les 10s tant que Forge est offline
+      if (!S._retryTimer) {
+        S._retryTimer = setInterval(async () => {
+          try {
+            await fetch(`${getForgeUrl()}/sdapi/v1/progress`, { method: 'GET' });
+            // Forge répond → reconnecter proprement
+            clearInterval(S._retryTimer); S._retryTimer = null;
+            connectForge();
+          } catch { /* toujours offline */ }
+        }, 10000);
+      }
     }
   }
 
@@ -522,7 +535,75 @@ const Inpaint = (() => {
 
     // Generate
     q('inp-gen-btn').onclick = generate;
-    q('inp-clear-history').onclick = () => { q('inp-results').innerHTML = ''; };
+
+    // Add to Scheduler
+    q('inp-sched-btn').onclick = () => {
+      if (!S.image) { setStatus('⚠ Charge une image d\'abord'); return; }
+      if (typeof Scheduler === 'undefined') { setStatus('⚠ Scheduler non disponible'); return; }
+
+      const { imageData, maskData } = serializeCanvas();
+      if (!imageData) { setStatus('⚠ Canvas vide'); return; }
+
+      const loras = [...document.querySelectorAll('#inp-lora-list .inp-lora-row')].map(row => ({
+        model:  row.querySelector('.inp-lora-sel')?.value  || '',
+        weight: +(row.querySelector('.inp-lora-weight')?.value ?? 1),
+      })).filter(l => l.model);
+
+      Scheduler.addInpaintTask({
+        name:     `Inpaint — ${new Date().toLocaleTimeString()}`,
+        prompt:   q('inp-prompt')?.value   || '',
+        negative: q('inp-neg')?.value      || '',
+        model:    q('inp-sel-model')?.value || '',
+        steps:    +(q('inpp-steps')?.value || 20),
+        cfg:      +(q('inpp-cfg')?.value   || 7),
+        seed:     -1,
+        count:    1,
+        width:    S.image.width,
+        height:   S.image.height,
+        loras,
+        inpaint: {
+          image:     imageData,
+          mask:      maskData,
+          denoising: +(q('inp-denoise')?.value ?? 0.75),
+          maskMode:  getRadio('inp-mmode') || 'masked',
+        },
+      });
+      setStatus('✅ Ajouté au Scheduler !');
+    };
+
+    q('inp-clear-history').onclick = () => {
+      q('inp-results').innerHTML = '';
+      if (q('inp-dl-history')) q('inp-dl-history').style.display = 'none';
+    };
+
+    q('inp-dl-history').onclick = async () => {
+      const imgs = [...q('inp-results').querySelectorAll('img:not(#inp-live-preview)')];
+      if (!imgs.length) return;
+      const btn = q('inp-dl-history');
+      btn.disabled = true; btn.textContent = '⏳';
+      try {
+        const zip  = new JSZip();
+        const date = new Date().toISOString().slice(0, 10);
+        let idx = 1;
+        for (const img of imgs) {
+          try {
+            const res  = await fetch(img.src);
+            const blob = await res.blob();
+            const ext  = blob.type.includes('png') ? 'png' : 'jpg';
+            zip.file(`inpaint_${date}_${String(idx).padStart(3, '0')}.${ext}`, blob);
+            idx++;
+          } catch { /* skip */ }
+        }
+        const blob = await zip.generateAsync({ type: 'blob' });
+        const a    = document.createElement('a');
+        a.href     = URL.createObjectURL(blob);
+        a.download = `inpaint_${date}.zip`;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      } finally {
+        btn.disabled = false; btn.textContent = '⬇';
+      }
+    };
 
     // Context menu (results)
     const ctxMenu = q('inp-ctx-menu');
@@ -819,14 +900,8 @@ const Inpaint = (() => {
   // ── Size helpers ───────────────────────────────────────────────────────────
   function applyAutoRatio() {
     if (!S.image) return;
-    const ratio = S.image.width / S.image.height;
-    let best = STD_SIZES[0], bestDiff = Infinity;
-    for (const sz of STD_SIZES) {
-      const diff = Math.abs(sz.w / sz.h - ratio);
-      if (diff < bestDiff) { bestDiff = diff; best = sz; }
-    }
-    q('inp-w').value = best.w;
-    q('inp-h').value = best.h;
+    q('inp-w').value = S.image.width;
+    q('inp-h').value = S.image.height;
   }
 
   function syncSizeToArea() {
@@ -1219,6 +1294,11 @@ const Inpaint = (() => {
       } else {
         setStatus(`❌ ${err.message}`);
         console.error('[Inpaint/Forge]', err);
+        // Forge a peut-être planté — marquer offline et tenter une reconnexion
+        S.forgeOnline = false;
+        setForgeIndicator(false);
+        showOffline();
+        connectForge(); // reconnexion silencieuse en arrière-plan
       }
     }
 
@@ -1273,6 +1353,7 @@ const Inpaint = (() => {
       ctxMenu.classList.add('open');
     });
     q('inp-results').prepend(img);
+    if (q('inp-dl-history')) q('inp-dl-history').style.display = '';
   }
 
   // ── Public API ─────────────────────────────────────────────────────────────

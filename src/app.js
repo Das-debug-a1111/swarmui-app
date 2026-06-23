@@ -218,12 +218,10 @@ async function loadVAEs() {
 }
 
 async function loadLoRAs() {
-  try {
-    const d = await API.listLoRAs();
-    App.loraModels = d.files || d.models || [];
-    // refresh all lora selects
-    document.querySelectorAll('.lora-sel').forEach(sel => populateLoRASelect(sel));
-  } catch (e) { console.warn('loadLoRAs:', e); }
+  const d = await API.listLoRAs();
+  App.loraModels = d.files || d.models || [];
+  document.querySelectorAll('.lora-sel').forEach(sel => populateLoRASelect(sel));
+  return App.loraModels.length;
 }
 
 async function loadParams() {
@@ -511,13 +509,21 @@ function renderLoRA(item) {
 
 $('btn-add-lora').addEventListener('click', addLoRAItem);
 $('btn-reload-loras').addEventListener('click', async () => {
+  if (!App.connected) { showErrorToast('Non connecté à SwarmUI'); return; }
   const btn = $('btn-reload-loras');
   btn.style.opacity = '0.4';
   btn.style.pointerEvents = 'none';
-  if (typeof TagComplete !== 'undefined') TagComplete.clearModelCache();
-  await loadLoRAs();
-  btn.style.opacity = '';
-  btn.style.pointerEvents = '';
+  try {
+    if (typeof TagComplete !== 'undefined') TagComplete.clearModelCache();
+    await API.triggerRefresh(true);   // force SwarmUI to rescan disk first
+    const count = await loadLoRAs();
+    toast(`✅ ${count} LoRA${count !== 1 ? 's' : ''} chargé${count !== 1 ? 's' : ''}`);
+  } catch (e) {
+    showErrorToast(`Reload LoRAs: ${e.message}`);
+  } finally {
+    btn.style.opacity = '';
+    btn.style.pointerEvents = '';
+  }
 });
 
 // ── Generate ──────────────────────────────────────────────────────────────────
@@ -540,6 +546,8 @@ function startGeneration() {
   $('btn-generate').classList.add('running');
   $('progress-wrap').classList.remove('hidden');
   setProgress(0, 'Starting…');
+  // Effacer l'erreur précédente
+  $('gen-error-toast')?.classList.remove('visible');
 
   // Build LoRA prompt suffix
   const loraSuffix = App.loraItems
@@ -657,6 +665,8 @@ function startGeneration() {
       $('btn-generate').classList.remove('running');
       $('progress-wrap').classList.add('hidden');
       showErrorToast(err);
+      // Session peut être périmée après un crash — tenter une reconnexion silencieuse
+      tryReconnect();
     },
   });
 }
@@ -664,6 +674,25 @@ function startGeneration() {
 function stopGeneration() {
   API.interrupt().catch(() => {});
   finishGeneration();
+}
+
+// ── Auto-reconnect after crash ─────────────────────────────────────────────────
+let _reconnecting = false;
+async function tryReconnect() {
+  if (_reconnecting) return;
+  _reconnecting = true;
+  setStatus('connecting', 'Reconnexion…');
+  try {
+    await API.getSession();
+    App.connected = true;
+    setStatus('connected', 'Connected');
+    toast('✅ Session restaurée — tu peux générer à nouveau');
+  } catch {
+    App.connected = false;
+    setStatus('error', 'Session perdue — relance SwarmUI');
+  } finally {
+    _reconnecting = false;
+  }
 }
 
 function showErrorToast(msg) {
@@ -676,7 +705,8 @@ function showErrorToast(msg) {
   toast.textContent = '⚠ ' + msg;
   toast.classList.add('visible');
   clearTimeout(toast._timer);
-  toast._timer = setTimeout(() => toast.classList.remove('visible'), 8000);
+  // Reste visible jusqu'à la prochaine génération réussie (pas d'auto-hide)
+  toast._timer = null;
 }
 
 function toast(msg) {
@@ -784,6 +814,7 @@ function addImageToGallery(img, groupLabel, isFirst) {
 
   div.addEventListener('click', () => openLightbox(img.url));
   row.appendChild(div);
+  updateGalleryToolbar();
 }
 
 async function showPngInfo(url) {
@@ -1031,6 +1062,51 @@ async function downloadImage(url) {
 }
 
 // ── Lightbox ──────────────────────────────────────────────────────────────────
+// ── Gallery download ──────────────────────────────────────────────────────────
+function updateGalleryToolbar() {
+  const imgs  = document.querySelectorAll('#gallery .gallery-img img');
+  const count = imgs.length;
+  const countEl = $('gallery-count');
+  const dlBtn   = $('btn-dl-gallery');
+  if (countEl) countEl.textContent = count > 0 ? `${count} image${count > 1 ? 's' : ''}` : '';
+  if (dlBtn)   dlBtn.style.display = count > 0 ? '' : 'none';
+}
+
+async function downloadGallery() {
+  const imgs = [...document.querySelectorAll('#gallery .gallery-img img')];
+  if (!imgs.length) return;
+
+  const btn = $('btn-dl-gallery');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ Compression…'; }
+
+  try {
+    const zip  = new JSZip();
+    const date = new Date().toISOString().slice(0, 10);
+    let idx = 1;
+    for (const img of imgs) {
+      try {
+        const res  = await fetch(img.src);
+        const blob = await res.blob();
+        const ext  = blob.type.includes('png') ? 'png' : 'jpg';
+        zip.file(`swarm_${date}_${String(idx).padStart(3, '0')}.${ext}`, blob);
+        idx++;
+      } catch { /* skip unreachable images */ }
+    }
+    const blob = await zip.generateAsync({ type: 'blob' });
+    const a    = document.createElement('a');
+    a.href     = URL.createObjectURL(blob);
+    a.download = `swarm_${date}.zip`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  } catch (e) {
+    showErrorToast(`Download: ${e.message}`);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '⬇ Télécharger la galerie'; }
+  }
+}
+
+$('btn-dl-gallery').addEventListener('click', downloadGallery);
+
 let _lbImgs = [];
 let _lbIdx  = 0;
 
