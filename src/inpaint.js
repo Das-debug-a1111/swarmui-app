@@ -19,6 +19,9 @@ const Inpaint = (() => {
     tool:             'brush',
     brushSize:        40,
     brushOpacity:     1.0,
+    sketchCanvas:     null,
+    sketchCtx:        null,
+    sketchColor:      '#ff0000',
     undoStack:        [],
     running:          false,
     initialized:      false,
@@ -115,7 +118,7 @@ const Inpaint = (() => {
   const _instStates = [{}]; // one state object per instance
 
   function serializeCanvas() {
-    if (!S.maskCanvas || !S.image) return { imageData: null, maskData: null };
+    if (!S.maskCanvas || !S.image) return { imageData: null, maskData: null, sketchData: null };
     // Full-res image
     const imgC = document.createElement('canvas');
     imgC.width = S.image.width; imgC.height = S.image.height;
@@ -127,19 +130,28 @@ const Inpaint = (() => {
     mCtx.fillStyle = 'black';
     mCtx.fillRect(0, 0, mskC.width, mskC.height);
     mCtx.drawImage(S.maskCanvas, 0, 0, mskC.width, mskC.height);
+    // Full-res sketch
+    let sketchData = null;
+    if (S.sketchCanvas) {
+      const skC = document.createElement('canvas');
+      skC.width = S.image.width; skC.height = S.image.height;
+      skC.getContext('2d').drawImage(S.sketchCanvas, 0, 0, skC.width, skC.height);
+      sketchData = skC.toDataURL('image/png');
+    }
     return {
       imageData: imgC.toDataURL('image/jpeg', 0.92), // JPEG to save memory
       maskData:  mskC.toDataURL('image/png'),
+      sketchData,
     };
   }
 
-  function restoreCanvas(imageData, maskData) {
+  function restoreCanvas(imageData, maskData, sketchData) {
     if (!imageData) {
-      // No image → show drop zone, clear canvas state
       S.image = null; S.imageData = null; S.maskCanvas = null; S.maskCtx = null;
+      S.sketchCanvas = null; S.sketchCtx = null;
       q('inp-stack').style.display  = 'none';
       q('inp-drop-zone').style.display = '';
-      q('inp-c-img').width = q('inp-c-mask').width = q('inp-c-cur').width = 0;
+      q('inp-c-img').width = q('inp-c-mask').width = q('inp-c-sketch').width = q('inp-c-cur').width = 0;
       return;
     }
     const img = new Image();
@@ -150,28 +162,32 @@ const Inpaint = (() => {
         const mImg = new Image();
         mImg.onload = () => {
           if (!S.maskCtx) return;
-          // Scale the stored mask back to canvas dimensions
           S.maskCtx.clearRect(0, 0, S.maskCanvas.width, S.maskCanvas.height);
-          // Only draw white (painted) pixels from the mask
           const tmpC = document.createElement('canvas');
           tmpC.width  = S.maskCanvas.width;
           tmpC.height = S.maskCanvas.height;
           const tmpCtx = tmpC.getContext('2d');
           tmpCtx.drawImage(mImg, 0, 0, tmpC.width, tmpC.height);
-          // Extract alpha from white pixels
           const id  = tmpCtx.getImageData(0, 0, tmpC.width, tmpC.height);
           const out = S.maskCtx.createImageData(tmpC.width, tmpC.height);
           for (let i = 0; i < id.data.length; i += 4) {
-            const lum = id.data[i]; // R channel (white = 255, black = 0)
-            out.data[i]     = 255;
-            out.data[i + 1] = 255;
-            out.data[i + 2] = 255;
-            out.data[i + 3] = lum; // alpha = brightness
+            const lum = id.data[i];
+            out.data[i] = out.data[i+1] = out.data[i+2] = 255;
+            out.data[i + 3] = lum;
           }
           S.maskCtx.putImageData(out, 0, 0);
           syncMaskDisplay();
         };
         mImg.src = maskData;
+      }
+      if (sketchData && S.sketchCtx) {
+        const skImg = new Image();
+        skImg.onload = () => {
+          if (!S.sketchCtx) return;
+          S.sketchCtx.clearRect(0, 0, S.sketchCanvas.width, S.sketchCanvas.height);
+          S.sketchCtx.drawImage(skImg, 0, 0, S.sketchCanvas.width, S.sketchCanvas.height);
+        };
+        skImg.src = sketchData;
       }
     };
     img.src = imageData;
@@ -181,15 +197,16 @@ const Inpaint = (() => {
     const canvas = serializeCanvas();
     return {
       ...collectSettings(),
-      imageData: canvas.imageData,
-      maskData:  canvas.maskData,
+      imageData:  canvas.imageData,
+      maskData:   canvas.maskData,
+      sketchData: canvas.sketchData,
     };
   }
 
   function applyInpaintState(state) {
     const s = state || {};
     applySettings(s);
-    restoreCanvas(s.imageData ?? null, s.maskData ?? null);
+    restoreCanvas(s.imageData ?? null, s.maskData ?? null, s.sketchData ?? null);
   }
 
   // ── Forge connection ───────────────────────────────────────────────────────
@@ -404,7 +421,9 @@ const Inpaint = (() => {
   function bindUI() {
     // Toolbar buttons
     q('inp-brush-btn').onclick  = () => setTool('brush');
+    q('inp-sketch-btn').onclick = () => setTool('sketch');
     q('inp-eraser-btn').onclick = () => setTool('eraser');
+    q('inp-sketch-color').oninput = function () { S.sketchColor = this.value; };
     q('inp-undo-btn').onclick   = undo;
     q('inp-clear-btn').onclick  = clearMask;
     q('inp-invert-btn').onclick = invertMask;
@@ -672,8 +691,10 @@ const Inpaint = (() => {
   // ── Tool ───────────────────────────────────────────────────────────────────
   function setTool(tool) {
     S.tool = tool;
-    q('inp-brush-btn').classList.toggle('on', tool === 'brush');
+    q('inp-brush-btn').classList.toggle('on',  tool === 'brush');
+    q('inp-sketch-btn').classList.toggle('on', tool === 'sketch');
     q('inp-eraser-btn').classList.toggle('on', tool === 'eraser');
+    q('inp-sketch-color').style.display = tool === 'sketch' ? 'inline-block' : 'none';
   }
 
   // ── Canvas ─────────────────────────────────────────────────────────────────
@@ -687,18 +708,38 @@ const Inpaint = (() => {
   }
 
   function paintAt(pos) {
+    const r = S.brushSize / 2;
+    if (S.tool === 'sketch') {
+      const ctx = S.sketchCtx;
+      if (!ctx) return;
+      ctx.globalCompositeOperation = 'source-over';
+      const a = Math.round(S.brushOpacity * 255).toString(16).padStart(2, '0');
+      ctx.fillStyle = S.sketchColor + a;
+      ctx.beginPath();
+      ctx.arc(pos.x, pos.y, r, 0, Math.PI * 2);
+      ctx.fill();
+      return;
+    }
     const ctx = S.maskCtx;
     if (S.tool === 'eraser') {
-      ctx.globalCompositeOperation = 'destination-out';
-      ctx.fillStyle = 'white';
+      const erase = c => {
+        c.globalCompositeOperation = 'destination-out';
+        c.fillStyle = 'white';
+        c.beginPath();
+        c.arc(pos.x, pos.y, r, 0, Math.PI * 2);
+        c.fill();
+        c.globalCompositeOperation = 'source-over';
+      };
+      erase(ctx);
+      if (S.sketchCtx) erase(S.sketchCtx);
     } else {
       ctx.globalCompositeOperation = 'source-over';
       const a = Math.round(S.brushOpacity * 255).toString(16).padStart(2, '0');
       ctx.fillStyle = `#ffffff${a}`;
+      ctx.beginPath();
+      ctx.arc(pos.x, pos.y, r, 0, Math.PI * 2);
+      ctx.fill();
     }
-    ctx.beginPath();
-    ctx.arc(pos.x, pos.y, S.brushSize / 2, 0, Math.PI * 2);
-    ctx.fill();
     syncMaskDisplay();
   }
 
@@ -717,8 +758,8 @@ const Inpaint = (() => {
     const c = q('inp-c-cur');
     const ctx = c.getContext('2d');
     ctx.clearRect(0, 0, c.width, c.height);
-    ctx.strokeStyle = S.tool === 'eraser' ? '#aaa' : '#fff';
-    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = S.tool === 'eraser' ? '#aaa' : S.tool === 'sketch' ? S.sketchColor : '#fff';
+    ctx.lineWidth = S.tool === 'sketch' ? 2 : 1.5;
     ctx.beginPath();
     ctx.arc(pos.x, pos.y, S.brushSize / 2, 0, Math.PI * 2);
     ctx.stroke();
@@ -735,13 +776,18 @@ const Inpaint = (() => {
 
   function saveUndo() {
     if (!S.maskCtx) return;
-    S.undoStack.push(S.maskCtx.getImageData(0, 0, S.maskCanvas.width, S.maskCanvas.height));
+    S.undoStack.push({
+      mask:   S.maskCtx.getImageData(0, 0, S.maskCanvas.width, S.maskCanvas.height),
+      sketch: S.sketchCtx ? S.sketchCtx.getImageData(0, 0, S.sketchCanvas.width, S.sketchCanvas.height) : null,
+    });
     if (S.undoStack.length > 30) S.undoStack.shift();
   }
 
   function undo() {
     if (!S.undoStack.length || !S.maskCtx) return;
-    S.maskCtx.putImageData(S.undoStack.pop(), 0, 0);
+    const frame = S.undoStack.pop();
+    S.maskCtx.putImageData(frame.mask, 0, 0);
+    if (S.sketchCtx && frame.sketch) S.sketchCtx.putImageData(frame.sketch, 0, 0);
     syncMaskDisplay();
   }
 
@@ -749,6 +795,7 @@ const Inpaint = (() => {
     if (!S.maskCtx) return;
     saveUndo();
     S.maskCtx.clearRect(0, 0, S.maskCanvas.width, S.maskCanvas.height);
+    if (S.sketchCtx) S.sketchCtx.clearRect(0, 0, S.sketchCanvas.width, S.sketchCanvas.height);
     syncMaskDisplay();
   }
 
@@ -886,6 +933,11 @@ const Inpaint = (() => {
     const maskC = q('inp-c-mask');
     maskC.width = dW; maskC.height = dH;
     maskC.style.opacity = q('inp-opacity-range').value / 100;
+
+    const sketchC = q('inp-c-sketch');
+    sketchC.width = dW; sketchC.height = dH;
+    S.sketchCanvas = sketchC;
+    S.sketchCtx    = sketchC.getContext('2d', { willReadFrequently: true });
 
     const curC = q('inp-c-cur');
     curC.width = dW; curC.height = dH;
@@ -1187,7 +1239,10 @@ const Inpaint = (() => {
       const imgC = document.createElement('canvas');
       imgC.width  = S.image.width;
       imgC.height = S.image.height;
-      imgC.getContext('2d').drawImage(S.image, 0, 0);
+      const iCtx  = imgC.getContext('2d');
+      iCtx.drawImage(S.image, 0, 0);
+      // Composite sketch strokes on top of the image
+      if (S.sketchCanvas) iCtx.drawImage(S.sketchCanvas, 0, 0, imgC.width, imgC.height);
       const imageB64 = imgC.toDataURL('image/png');
 
       const maskC   = document.createElement('canvas');
@@ -1197,6 +1252,21 @@ const Inpaint = (() => {
       mCtx.fillStyle = 'black';
       mCtx.fillRect(0, 0, maskC.width, maskC.height);
       mCtx.drawImage(S.maskCanvas, 0, 0, maskC.width, maskC.height);
+      // Add sketch painted areas to the mask
+      if (S.sketchCanvas) {
+        const skC = document.createElement('canvas');
+        skC.width = S.image.width; skC.height = S.image.height;
+        skC.getContext('2d').drawImage(S.sketchCanvas, 0, 0, skC.width, skC.height);
+        const skData = skC.getContext('2d').getImageData(0, 0, skC.width, skC.height);
+        const mData  = mCtx.getImageData(0, 0, maskC.width, maskC.height);
+        for (let i = 0; i < skData.data.length; i += 4) {
+          if (skData.data[i + 3] > 10) {
+            mData.data[i] = mData.data[i+1] = mData.data[i+2] = 255;
+            mData.data[i+3] = 255;
+          }
+        }
+        mCtx.putImageData(mData, 0, 0);
+      }
       const maskB64 = maskC.toDataURL('image/png');
 
       const onlyMasked  = getRadio('inp-area') === 'only_masked';

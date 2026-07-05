@@ -684,8 +684,13 @@ body.cs-panel-open #view-inpaint.active { padding-right: 400px; }
 }
 #inp-stack canvas { position: absolute; top: 0; left: 0; }
 #inp-c-img  { position: relative !important; display: block; }
-#inp-c-mask { opacity: .72; pointer-events: none; }
-#inp-c-cur  { pointer-events: none; }
+#inp-c-mask   { opacity: .72; pointer-events: none; }
+#inp-c-sketch { pointer-events: none; opacity: .85; }
+#inp-c-cur    { pointer-events: none; }
+#inp-sketch-color {
+  display: none; width: 28px; height: 28px; padding: 2px; border: 1px solid var(--border);
+  border-radius: 4px; cursor: pointer; background: none; vertical-align: middle;
+}
 
 /* Results panel (right) */
 #inp-results-panel {

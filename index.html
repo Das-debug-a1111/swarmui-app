@@ -373,6 +373,8 @@
       <div id="inp-canvas-side">
         <div id="inp-toolbar">
           <button class="inp-tbtn on" id="inp-brush-btn">🖌 Brush</button>
+          <button class="inp-tbtn" id="inp-sketch-btn">✏️ Sketch</button>
+          <input type="color" id="inp-sketch-color" value="#ff0000" title="Sketch color">
           <button class="inp-tbtn" id="inp-eraser-btn">◻ Eraser</button>
           <button class="inp-tbtn" id="inp-undo-btn">↩ Undo</button>
           <button class="inp-tbtn" id="inp-clear-btn">🗑 Clear</button>
@@ -402,6 +404,7 @@
           <div id="inp-stack">
             <canvas id="inp-c-img"></canvas>
             <canvas id="inp-c-mask"></canvas>
+            <canvas id="inp-c-sketch"></canvas>
             <canvas id="inp-c-cur"></canvas>
           </div>
         </div>
