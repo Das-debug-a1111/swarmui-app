@@ -19,6 +19,7 @@ const Inpaint = (() => {
     tool:             'brush',
     brushSize:        40,
     brushOpacity:     1.0,
+    lastPos:          null,
     sketchCanvas:     null,
     sketchCtx:        null,
     sketchColor:      '#ff0000',
@@ -460,16 +461,17 @@ const Inpaint = (() => {
       if (!S.image || e.button !== 0) return;
       saveUndo();
       S.drawing = true;
-      paintAt(getPos(e));
+      S.lastPos = getPos(e);
+      paintAt(S.lastPos, null);
     };
     ctr.onmousemove = e => {
       if (!S.image) return;
       const pos = getPos(e);
       drawCursor(pos);
-      if (S.drawing) paintAt(pos);
+      if (S.drawing) { paintAt(pos, S.lastPos); S.lastPos = pos; }
     };
-    ctr.onmouseup    = () => { S.drawing = false; };
-    ctr.onmouseleave = () => { S.drawing = false; clearCursor(); };
+    ctr.onmouseup    = () => { S.drawing = false; S.lastPos = null; };
+    ctr.onmouseleave = () => { S.drawing = false; S.lastPos = null; clearCursor(); };
 
     // Sliders
     bindSlider('inp-denoise',       'inp-denoise-val',       2);
@@ -707,38 +709,34 @@ const Inpaint = (() => {
     };
   }
 
-  function paintAt(pos) {
+  function paintAt(pos, fromPos) {
     const r = S.brushSize / 2;
-    if (S.tool === 'sketch') {
-      const ctx = S.sketchCtx;
-      if (!ctx) return;
-      ctx.globalCompositeOperation = 'source-over';
-      const a = Math.round(S.brushOpacity * 255).toString(16).padStart(2, '0');
-      ctx.fillStyle = S.sketchColor + a;
+
+    function stroke(ctx, color, composite) {
+      ctx.globalCompositeOperation = composite;
+      ctx.strokeStyle = color;
+      ctx.lineWidth   = S.brushSize;
+      ctx.lineCap     = 'round';
+      ctx.lineJoin    = 'round';
       ctx.beginPath();
-      ctx.arc(pos.x, pos.y, r, 0, Math.PI * 2);
-      ctx.fill();
+      if (fromPos) { ctx.moveTo(fromPos.x, fromPos.y); ctx.lineTo(pos.x, pos.y); }
+      else         { ctx.moveTo(pos.x, pos.y); ctx.lineTo(pos.x, pos.y); }
+      ctx.stroke();
+      ctx.globalCompositeOperation = 'source-over';
+    }
+
+    if (S.tool === 'sketch') {
+      if (!S.sketchCtx) return;
+      const a = Math.round(S.brushOpacity * 255).toString(16).padStart(2, '0');
+      stroke(S.sketchCtx, S.sketchColor + a, 'source-over');
       return;
     }
-    const ctx = S.maskCtx;
     if (S.tool === 'eraser') {
-      const erase = c => {
-        c.globalCompositeOperation = 'destination-out';
-        c.fillStyle = 'white';
-        c.beginPath();
-        c.arc(pos.x, pos.y, r, 0, Math.PI * 2);
-        c.fill();
-        c.globalCompositeOperation = 'source-over';
-      };
-      erase(ctx);
-      if (S.sketchCtx) erase(S.sketchCtx);
+      stroke(S.maskCtx, 'white', 'destination-out');
+      if (S.sketchCtx) stroke(S.sketchCtx, 'white', 'destination-out');
     } else {
-      ctx.globalCompositeOperation = 'source-over';
       const a = Math.round(S.brushOpacity * 255).toString(16).padStart(2, '0');
-      ctx.fillStyle = `#ffffff${a}`;
-      ctx.beginPath();
-      ctx.arc(pos.x, pos.y, r, 0, Math.PI * 2);
-      ctx.fill();
+      stroke(S.maskCtx, `#ffffff${a}`, 'source-over');
     }
     syncMaskDisplay();
   }
