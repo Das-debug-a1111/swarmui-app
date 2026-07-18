@@ -10,6 +10,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   configPickDataFolder:()     => ipcRenderer.invoke('config:pickDataFolder'),
   onUpdateAvailable:    (cb)  => ipcRenderer.on('update-available', (_, v) => cb(v)),
 
+  // Process launcher (SwarmUI, Forge, …) — key selects the config.json field
+  pickLaunchScript:     (key, title, message) => ipcRenderer.invoke('launcher:pickScript', key, title, message),
+  launchProcess:        (key, args)           => ipcRenderer.invoke('launcher:launch', key, args),
+
   // Model downloads
   pickModelsFolder:     ()         => ipcRenderer.invoke('models:pickFolder'),
   downloadModel:        (url, dst) => ipcRenderer.invoke('models:download', { url, destPath: dst }),

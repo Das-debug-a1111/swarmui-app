@@ -419,6 +419,25 @@ $('cn-img-drop').addEventListener('drop', e => {
 });
 $('cn-img-clear').addEventListener('click', clearCNImage);
 
+document.addEventListener('paste', e => {
+  if (!$('view-txt2img') || $('view-txt2img').style.display === 'none') return;
+  if (!$('chk-cn').checked) return;
+  const items = e.clipboardData?.items;
+  if (!items) return;
+  for (const item of items) {
+    if (item.type.startsWith('image/')) {
+      e.preventDefault();
+      const file = item.getAsFile();
+      if (file) {
+        const r = new FileReader();
+        r.onload = ev => setCNImage(ev.target.result);
+        r.readAsDataURL(file);
+      }
+      break;
+    }
+  }
+});
+
 // ── Sidebar: seed ─────────────────────────────────────────────────────────────
 $('btn-rand-seed').addEventListener('click', () => {
   $('inp-seed').value = -1;
@@ -806,6 +825,7 @@ function addImageToGallery(img, groupLabel, isFirst) {
       <button class="gal-btn" data-action="schedule"  title="Send to Scheduler">📅</button>
       <button class="gal-btn" data-action="watermark" title="Send to Watermark">💧</button>
       <button class="gal-btn" data-action="info"      title="Image info">ℹ</button>
+      <button class="gal-btn" data-action="copy"      title="Copy image (Discord, etc.)">📋</button>
       <button class="gal-btn" data-action="save"      title="Save image">💾</button>
     </div>`;
 
@@ -831,6 +851,10 @@ function addImageToGallery(img, groupLabel, isFirst) {
   div.querySelector('[data-action="info"]').addEventListener('click', e => {
     e.stopPropagation();
     showPngInfo(img.url);
+  });
+  div.querySelector('[data-action="copy"]').addEventListener('click', e => {
+    e.stopPropagation();
+    copyImageToClipboard(img.url);
   });
   div.querySelector('[data-action="save"]').addEventListener('click', e => {
     e.stopPropagation();
@@ -1068,6 +1092,35 @@ function _showPngInfoModal(text) {
   document.body.appendChild(modal);
 }
 
+// ClipboardItem only accepts image/png — re-encode via canvas since SwarmUI can serve jpg/webp too
+function toPngBlob(blob) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width  = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      canvas.getContext('2d').drawImage(img, 0, 0);
+      canvas.toBlob(b => b ? resolve(b) : reject(new Error('toBlob failed')), 'image/png');
+      URL.revokeObjectURL(img.src);
+    };
+    img.onerror = () => reject(new Error('image decode failed'));
+    img.src = URL.createObjectURL(blob);
+  });
+}
+
+async function copyImageToClipboard(url) {
+  try {
+    const res     = await fetch(url);
+    const blob    = await res.blob();
+    const pngBlob = blob.type === 'image/png' ? blob : await toPngBlob(blob);
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })]);
+    toast('✅ Image copiée !');
+  } catch (e) {
+    toast('❌ Copie impossible: ' + e.message);
+  }
+}
+
 async function downloadImage(url) {
   try {
     const res  = await fetch(url);
@@ -1178,6 +1231,12 @@ document.addEventListener('keydown', e => {
     if (e.key === 'Escape')      { closeLightbox(); return; }
     if (e.key === 'ArrowRight')  { e.preventDefault(); _lbGo(1);  return; }
     if (e.key === 'ArrowLeft')   { e.preventDefault(); _lbGo(-1); return; }
+    // Ctrl+C (Win/Linux) or Cmd+C (Mac)
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
+      e.preventDefault();
+      copyImageToClipboard(_lbImgs[_lbIdx]);
+      return;
+    }
   }
 });
 
@@ -1589,6 +1648,77 @@ function sendToScheduler(seed) {
 $('btn-connect').addEventListener('click', connect);
 $('host-input').addEventListener('keydown', e => { if (e.key === 'Enter') connect(); });
 
+// ── Launch SwarmUI locally (Windows only) ──────────────────────────────────────
+async function waitForSwarmPort(host, maxAttempts, intervalMs) {
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      const r = await fetch(`http://${host}/API/GetNewSession`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ session_id: '' }),
+      });
+      if (r.ok) return true;
+    } catch {}
+    await new Promise(res => setTimeout(res, intervalMs));
+  }
+  return false;
+}
+
+async function launchSwarmUI() {
+  const btn = $('btn-launch-swarm');
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  try {
+    const pickScript = () => window.electronAPI.pickLaunchScript(
+      'swarmLaunchScript',
+      'Sélectionne le script de lancement de SwarmUI',
+      'Choisis launch-windows.bat (ou ton propre .bat) dans le dossier SwarmUI',
+    );
+
+    const cfg = await window.electronAPI.configGet();
+    if (!cfg?.swarmLaunchScript) {
+      const picked = await pickScript();
+      if (!picked) return;
+    }
+
+    const host = $('host-input').value.trim() || 'localhost:7801';
+    $('host-input').value = host;
+    const [swarmIp, swarmPort] = host.split(':');
+    // Pin host/port explicitly — SwarmUI otherwise falls back to its last-saved settings
+    const launchArgs = swarmIp && swarmPort ? ['--host', swarmIp, '--port', swarmPort] : [];
+
+    btn.textContent = '⏳ Démarrage…';
+    let res = await window.electronAPI.launchProcess('swarmLaunchScript', launchArgs);
+
+    // Script moved/deleted since it was configured — ask again instead of failing forever
+    if (res?.error === 'script_not_found' || res?.error === 'no_script_configured') {
+      const picked = await pickScript();
+      if (!picked) return;
+      res = await window.electronAPI.launchProcess('swarmLaunchScript', launchArgs);
+    }
+
+    if (res?.error) {
+      setStatus('error', 'Erreur lancement SwarmUI: ' + res.error);
+      return;
+    }
+
+    setStatus('connecting', 'Démarrage de SwarmUI…');
+    const ready = await waitForSwarmPort(host, 40, 1500);
+    if (!ready) {
+      setStatus('error', 'SwarmUI ne répond pas (timeout)');
+      return;
+    }
+
+    localStorage.setItem('swarm-host', host);
+    await connect();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+}
+
+$('btn-launch-swarm').addEventListener('click', launchSwarmUI);
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function esc(s) {
   return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -1599,6 +1729,11 @@ window.addEventListener('DOMContentLoaded', () => {
   // Restore saved host if any
   const savedHost = localStorage.getItem('swarm-host');
   if (savedHost) $('host-input').value = savedHost;
+
+  // Launch-SwarmUI button only makes sense on the machine running SwarmUI itself
+  if (window.electronAPI?.platform === 'win32') {
+    $('btn-launch-swarm').style.display = '';
+  }
 
   // Init tag autocomplete
   TagComplete.init();

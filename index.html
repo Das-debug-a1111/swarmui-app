@@ -32,6 +32,7 @@
       <div class="status-dot" id="status-dot"></div>
       <span id="status-text">Disconnected</span>
       <input type="text" id="host-input" value="localhost:7801" spellcheck="false">
+      <button class="btn-secondary" id="btn-launch-swarm" style="display:none" title="Lancer SwarmUI en local sur ce PC">🚀 Lancer SwarmUI</button>
       <button class="btn-connect" id="btn-connect">Connect</button>
     </div>
   </div>
@@ -242,7 +243,7 @@
           <div class="field">
             <div class="field-label">Control image</div>
             <div id="cn-img-drop" style="border:2px dashed var(--border);border-radius:6px;padding:10px;text-align:center;cursor:pointer;font-size:11px;color:var(--muted);transition:border-color .15s">
-              Click or drop an image
+              Click or drop an image<br>or paste from clipboard (⌘V)
             </div>
             <input type="file" id="cn-img-file" accept="image/*" style="display:none">
             <img id="cn-img-preview" style="display:none;width:100%;margin-top:6px;border-radius:4px;border:1px solid var(--border)" alt="preview">
@@ -458,6 +459,7 @@
             style="flex:1;font-size:10px;font-family:monospace">
           <button class="inp-btn-sm" id="inp-forge-reconnect" title="Reconnect to Forge">↺</button>
         </div>
+        <button class="inp-btn-sm" id="inp-forge-launch" style="width:100%;margin-top:5px;display:none" title="Lancer Forge en local sur ce PC">🚀 Lancer Forge</button>
         <button class="inp-btn-sm" id="inp-free-swarm-vram" style="width:100%;margin-top:5px" title="Libère la VRAM retenue par SwarmUI (à faire toi-même avant une session Forge, pas automatique)">🧹 Libérer VRAM SwarmUI</button>
         <div class="inp-col-lbl" style="margin-top:7px">Presets</div>
         <div style="display:flex;gap:5px">
@@ -933,6 +935,7 @@
       <label class="wm-tlbl">Scale <span id="wm-scale-val">1.00×</span></label>
       <input type="range" id="wm-scale" min="0.1" max="3" step="0.05" value="1">
       <span class="wm-sep"></span>
+      <button class="wm-tbtn" id="wm-copy" title="Copy image (Discord, etc.)">📋 Copy</button>
       <button class="wm-tbtn wm-tbtn-primary" id="wm-export">⬇ Export PNG</button>
     </div>
 
@@ -1005,6 +1008,7 @@
     <div class="sws-ctx-item" id="sws-ctx-inpaint">🖌 Send to Inpaint</div>
     <div class="sws-ctx-item" id="sws-ctx-watermark">💧 Send to Watermark</div>
     <div class="sws-ctx-item" id="sws-ctx-open">🔍 Open fullscreen</div>
+    <div class="sws-ctx-item" id="sws-ctx-copy">📋 Copy image</div>
     <div class="sws-ctx-item" id="sws-ctx-dl">⬇ Download</div>
   </div>
 
@@ -1015,6 +1019,7 @@
   <div id="inp-ctx-menu">
     <div class="inp-ctx-item" id="inp-ctx-use">🖼 Use as init image</div>
     <div class="inp-ctx-item" id="inp-ctx-watermark">💧 Send to Watermark</div>
+    <div class="inp-ctx-item" id="inp-ctx-copy">📋 Copy image</div>
     <div class="inp-ctx-item" id="inp-ctx-dl">⬇ Download</div>
   </div>
 
@@ -1096,6 +1101,7 @@
             style="flex:1;font-size:10px;font-family:monospace">
           <button class="inp-btn-sm" id="ips-forge-reconnect" title="Reconnect to Forge">↺</button>
         </div>
+        <button class="inp-btn-sm" id="ips-forge-launch" style="width:100%;margin-top:5px;display:none" title="Lancer Forge en local sur ce PC">🚀 Lancer Forge</button>
         <button class="inp-btn-sm" id="ips-free-swarm-vram" style="width:100%;margin-top:5px" title="Libère la VRAM retenue par SwarmUI (manuel, pas automatique)">🧹 Libérer VRAM SwarmUI</button>
       </div>
 
@@ -1339,7 +1345,7 @@
 <!-- Lightbox -->
 <div id="lightbox" class="hidden">
   <div id="lightbox-backdrop"></div>
-  <img id="lightbox-img" src="" alt="">
+  <img id="lightbox-img" src="" alt="" title="Ctrl+C / ⌘+C to copy image">
   <button id="lightbox-close">✕</button>
   <div id="lightbox-counter"></div>
 </div>

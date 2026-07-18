@@ -215,6 +215,46 @@ const Inpaint = (() => {
     return (q('inp-forge-url')?.value.trim() || localStorage.getItem('forge-url') || 'http://192.168.8.67:58190').replace(/\/$/, '');
   }
 
+  async function launchForge() {
+    const btn = q('inp-forge-launch');
+    if (!btn) return;
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    try {
+      const pickScript = () => window.electronAPI.pickLaunchScript(
+        'forgeLaunchScript',
+        'Sélectionne le script de lancement de Forge',
+        'Choisis webui-user.bat (ou ton propre .bat) dans le dossier Forge',
+      );
+
+      const cfg = await window.electronAPI.configGet();
+      if (!cfg?.forgeLaunchScript) {
+        const picked = await pickScript();
+        if (!picked) return;
+      }
+
+      btn.textContent = '⏳ Démarrage…';
+      let res = await window.electronAPI.launchProcess('forgeLaunchScript');
+
+      if (res?.error === 'script_not_found' || res?.error === 'no_script_configured') {
+        const picked = await pickScript();
+        if (!picked) return;
+        res = await window.electronAPI.launchProcess('forgeLaunchScript');
+      }
+
+      if (res?.error) {
+        setStatus('Erreur lancement Forge: ' + res.error);
+        return;
+      }
+
+      // connectForge() retries every 10s on its own until Forge responds
+      connectForge();
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalText;
+    }
+  }
+
   function setForgeIndicator(online) {
     const el = q('inp-forge-indicator');
     if (!el) return;
@@ -393,6 +433,11 @@ const Inpaint = (() => {
     bindUI();
     renderPresetList();
 
+    // Launch-Forge button only makes sense on the machine running Forge itself
+    if (window.electronAPI?.platform === 'win32' && q('inp-forge-launch')) {
+      q('inp-forge-launch').style.display = '';
+    }
+
     // Instance bar
     createInstanceBar(q('inp-inst-bar'), {
       onSave:   (idx) => { _instStates[idx] = collectInpaintState(); },
@@ -547,6 +592,7 @@ const Inpaint = (() => {
       localStorage.setItem('forge-url', q('inp-forge-url').value.trim());
     });
     q('inp-forge-reconnect')?.addEventListener('click', connectForge);
+    q('inp-forge-launch')?.addEventListener('click', launchForge);
     q('inp-free-swarm-vram')?.addEventListener('click', async () => {
       setStatus('Libération VRAM SwarmUI…');
       try {
@@ -647,6 +693,11 @@ const Inpaint = (() => {
       const src = ctxMenu?._src;
       ctxMenu?.classList.remove('open');
       if (src) sendToWatermark(src);
+    };
+    q('inp-ctx-copy').onclick = () => {
+      const src = ctxMenu?._src;
+      ctxMenu?.classList.remove('open');
+      if (src) copyImageToClipboard(src);
     };
     q('inp-ctx-dl').onclick = async () => {
       const src = ctxMenu?._src;

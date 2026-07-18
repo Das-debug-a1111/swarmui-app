@@ -87,6 +87,7 @@ const Watermark = (() => {
 
     // Export
     $('wm-export').addEventListener('click', exportImage);
+    $('wm-copy').addEventListener('click', copyImage);
 
     // Drag watermark overlay
     const overlayWrap = $('wm-overlay-wrap');
@@ -226,8 +227,7 @@ const Watermark = (() => {
 
   // ── Export ───────────────────────────────────────────────────────────────────
 
-  function exportImage() {
-    if (!S.baseUrl) return;
+  function buildWatermarkedCanvas() {
     const baseImg = $('wm-base-img');
     const canvas  = document.createElement('canvas');
     canvas.width  = baseImg.naturalWidth;
@@ -248,11 +248,26 @@ const Watermark = (() => {
       ctx.drawImage(overlay, x, y, w, h);
       ctx.globalAlpha = 1;
     }
+    return canvas;
+  }
 
+  function exportImage() {
+    if (!S.baseUrl) return;
     const a      = document.createElement('a');
     a.download   = 'watermarked_' + Date.now() + '.png';
-    a.href       = canvas.toDataURL('image/png');
+    a.href       = buildWatermarkedCanvas().toDataURL('image/png');
     a.click();
+  }
+
+  async function copyImage() {
+    if (!S.baseUrl) return;
+    try {
+      const blob = await new Promise(r => buildWatermarkedCanvas().toBlob(r, 'image/png'));
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+      toast('✅ Image copiée !');
+    } catch (e) {
+      toast('❌ Copie impossible: ' + e.message);
+    }
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────────

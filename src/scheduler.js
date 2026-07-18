@@ -1426,6 +1426,9 @@ const Scheduler = (() => {
     document.getElementById('sws-ctx-open').addEventListener('click', () => {
       if (_galCtxSrc) { closeGalCtx(); openLightbox(_galCtxSrc, _galCtxGrid); }
     });
+    document.getElementById('sws-ctx-copy').addEventListener('click', () => {
+      if (_galCtxSrc) { closeGalCtx(); copyImageToClipboard(_galCtxSrc); }
+    });
     document.getElementById('sws-ctx-dl').addEventListener('click', () => {
       if (_galCtxSrc) {
         closeGalCtx();

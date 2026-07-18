@@ -107,6 +107,46 @@ const InpaintScheduler = (() => {
     }
   }
 
+  async function launchForge() {
+    const btn = q('ips-forge-launch');
+    if (!btn) return;
+    const originalText = btn.textContent;
+    btn.disabled = true;
+    try {
+      const pickScript = () => window.electronAPI.pickLaunchScript(
+        'forgeLaunchScript',
+        'Sélectionne le script de lancement de Forge',
+        'Choisis webui-user.bat (ou ton propre .bat) dans le dossier Forge',
+      );
+
+      const cfg = await window.electronAPI.configGet();
+      if (!cfg?.forgeLaunchScript) {
+        const picked = await pickScript();
+        if (!picked) return;
+      }
+
+      btn.textContent = '⏳ Démarrage…';
+      let res = await window.electronAPI.launchProcess('forgeLaunchScript');
+
+      if (res?.error === 'script_not_found' || res?.error === 'no_script_configured') {
+        const picked = await pickScript();
+        if (!picked) return;
+        res = await window.electronAPI.launchProcess('forgeLaunchScript');
+      }
+
+      if (res?.error) {
+        toast(`Erreur lancement Forge: ${res.error}`, 'error');
+        return;
+      }
+
+      // connectForge() retries every 10s on its own until Forge responds
+      connectForge();
+    } finally {
+      btn.disabled = false;
+      btn.textContent = originalText;
+    }
+  }
+
   function updateButtons() {
     const hasReady = S.items.some(it => it.status === 'ready');
     q('ips-btn-run').disabled   = !S.forgeOnline || S.running || !hasReady;
@@ -561,7 +601,14 @@ const InpaintScheduler = (() => {
     q('ips-gallery').querySelector('.sws-gal-empty')?.remove();
     const card = document.createElement('div');
     card.className = 'ips-result-card';
-    card.innerHTML = `<img src="${esc(item.resultURL)}" alt=""><button class="ips-result-dl" title="Download">⬇</button>`;
+    card.innerHTML = `<img src="${esc(item.resultURL)}" alt="">
+      <div class="ips-result-actions">
+        <button class="ips-result-copy" title="Copy image">📋</button>
+        <button class="ips-result-dl" title="Download">⬇</button>
+      </div>`;
+    card.querySelector('.ips-result-copy').addEventListener('click', () => {
+      copyImageToClipboard(item.resultURL);
+    });
     card.querySelector('.ips-result-dl').addEventListener('click', () => {
       const a = document.createElement('a');
       a.href = item.resultURL;
@@ -674,6 +721,10 @@ const InpaintScheduler = (() => {
     q('ips-btn-reset').onclick = resetDone;
     q('ips-btn-clear').onclick = clearQueue;
     q('ips-forge-reconnect').onclick = connectForge;
+    q('ips-forge-launch').onclick = launchForge;
+    if (window.electronAPI?.platform === 'win32') {
+      q('ips-forge-launch').style.display = '';
+    }
     q('ips-free-swarm-vram').onclick = async () => {
       try {
         const res = await API.freeBackendMemory?.();

@@ -5,6 +5,7 @@ const fs      = require('fs').promises;
 const fsSync  = require('fs');
 const crypto  = require('crypto');
 const zlib    = require('zlib');
+const { spawn } = require('child_process');
 
 // ── Config (persisted in userData) ───────────────────────────────────────────
 const CONFIG_FILE = path.join(app.getPath('userData'), 'config.json');
@@ -36,7 +37,11 @@ function invalidateCache() {
 }
 
 // ── IPC: config ───────────────────────────────────────────────────────────────
-ipcMain.handle('config:get', () => ({ dataPath: DATA_PATH }));
+ipcMain.handle('config:get', () => ({
+  dataPath:          DATA_PATH,
+  swarmLaunchScript: config.swarmLaunchScript || null,
+  forgeLaunchScript: config.forgeLaunchScript || null,
+}));
 
 ipcMain.handle('config:pickDataFolder', async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog({
@@ -180,6 +185,68 @@ ipcMain.handle('models:download', async (event, { url, destPath }) => {
 
     req.end();
   });
+});
+
+// ── IPC: process launcher (SwarmUI, Forge, …) ─────────────────────────────────
+// `key` selects which config.json field holds the script path (e.g. 'swarmLaunchScript',
+// 'forgeLaunchScript') and doubles as the running-process registry key.
+const launchedProcesses = {};
+
+ipcMain.handle('launcher:pickScript', async (_, key, dialogTitle, dialogMessage) => {
+  const { canceled, filePaths } = await dialog.showOpenDialog({
+    title:       dialogTitle,
+    message:     dialogMessage,
+    properties:  ['openFile'],
+    filters:     [{ name: 'Batch script', extensions: ['bat', 'cmd'] }],
+  });
+  if (canceled || !filePaths.length) return null;
+
+  config[key] = filePaths[0];
+  saveConfig(config);
+  return filePaths[0];
+});
+
+ipcMain.handle('launcher:launch', (_, key, args = []) => {
+  const running = launchedProcesses[key];
+  if (running && running.exitCode === null) return { ok: true, alreadyRunning: true };
+
+  const scriptPath = config[key];
+  if (!scriptPath) return { error: 'no_script_configured' };
+  if (!fsSync.existsSync(scriptPath)) {
+    delete config[key];
+    saveConfig(config);
+    return { error: 'script_not_found' };
+  }
+
+  try {
+    // Run by basename with cwd set to its folder — spawning the full path via
+    // shell:true breaks silently on Windows when the folder name has spaces
+    // (cmd.exe splits the unquoted path into separate tokens).
+    // NoDefaultCurrentDirectoryInExePath (set system-wide here) blocks cmd.exe's
+    // implicit cwd search for bare filenames — including inside the launched
+    // script's own `call other.bat` lines — so strip it for this child only.
+    const env = { ...process.env };
+    delete env.NoDefaultCurrentDirectoryInExePath;
+
+    // Build one command string ourselves — passing `args` alongside shell:true
+    // makes Node concatenate them unescaped and emit a deprecation warning.
+    const quotedArgs = args.map(a => /\s/.test(a) ? `"${a}"` : a).join(' ');
+    const commandLine = quotedArgs ? `${path.basename(scriptPath)} ${quotedArgs}` : path.basename(scriptPath);
+
+    const proc = spawn(commandLine, [], {
+      cwd:      path.dirname(scriptPath),
+      shell:    true,
+      detached: true,
+      stdio:    'ignore',
+      env,
+    });
+    proc.unref();
+    proc.on('exit', () => { launchedProcesses[key] = null; });
+    launchedProcesses[key] = proc;
+    return { ok: true };
+  } catch (e) {
+    return { error: e.message };
+  }
 });
 
 // ── Window ────────────────────────────────────────────────────────────────────
