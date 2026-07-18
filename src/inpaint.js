@@ -23,11 +23,10 @@ const Inpaint = (() => {
     sketchCanvas:     null,
     sketchCtx:        null,
     sketchColor:      '#ff0000',
+    sketchHasContent: false, // évite le passage pixel-par-pixel plein-résolution si rien n'a été dessiné
     undoStack:        [],
     running:          false,
     initialized:      false,
-    pendingCrop:      null,  // kept for compat but unused with Forge
-    pendingWhole:     false, // kept for compat but unused with Forge
     originalMetadata: null,  // raw JSON metadata from the source image
     forgeOnline:      false,
     _retryTimer:      null,
@@ -133,7 +132,7 @@ const Inpaint = (() => {
     mCtx.drawImage(S.maskCanvas, 0, 0, mskC.width, mskC.height);
     // Full-res sketch
     let sketchData = null;
-    if (S.sketchCanvas) {
+    if (S.sketchCanvas && S.sketchHasContent) {
       const skC = document.createElement('canvas');
       skC.width = S.image.width; skC.height = S.image.height;
       skC.getContext('2d').drawImage(S.sketchCanvas, 0, 0, skC.width, skC.height);
@@ -187,6 +186,7 @@ const Inpaint = (() => {
           if (!S.sketchCtx) return;
           S.sketchCtx.clearRect(0, 0, S.sketchCanvas.width, S.sketchCanvas.height);
           S.sketchCtx.drawImage(skImg, 0, 0, S.sketchCanvas.width, S.sketchCanvas.height);
+          S.sketchHasContent = true;
         };
         skImg.src = sketchData;
       }
@@ -547,6 +547,15 @@ const Inpaint = (() => {
       localStorage.setItem('forge-url', q('inp-forge-url').value.trim());
     });
     q('inp-forge-reconnect')?.addEventListener('click', connectForge);
+    q('inp-free-swarm-vram')?.addEventListener('click', async () => {
+      setStatus('Libération VRAM SwarmUI…');
+      try {
+        const res = await API.freeBackendMemory?.();
+        setStatus(res ? '✅ VRAM SwarmUI libérée' : '⚠ SwarmUI non connecté');
+      } catch (e) {
+        setStatus(`❌ ${e.message}`);
+      }
+    });
 
     // Soft Inpainting — show/hide sub-params
     q('inpp-soft')?.addEventListener('change', () => {
@@ -639,11 +648,6 @@ const Inpaint = (() => {
       ctxMenu?.classList.remove('open');
       if (src) sendToWatermark(src);
     };
-    q('inp-ctx-img2vid').onclick = () => {
-      const src = ctxMenu?._src;
-      ctxMenu?.classList.remove('open');
-      if (src) sendToImg2Vid(src);
-    };
     q('inp-ctx-dl').onclick = async () => {
       const src = ctxMenu?._src;
       ctxMenu?.classList.remove('open');
@@ -729,6 +733,7 @@ const Inpaint = (() => {
       if (!S.sketchCtx) return;
       const a = Math.round(S.brushOpacity * 255).toString(16).padStart(2, '0');
       stroke(S.sketchCtx, S.sketchColor + a, 'source-over');
+      S.sketchHasContent = true;
       return;
     }
     if (S.tool === 'eraser') {
@@ -794,6 +799,7 @@ const Inpaint = (() => {
     saveUndo();
     S.maskCtx.clearRect(0, 0, S.maskCanvas.width, S.maskCanvas.height);
     if (S.sketchCtx) S.sketchCtx.clearRect(0, 0, S.sketchCanvas.width, S.sketchCanvas.height);
+    S.sketchHasContent = false;
     syncMaskDisplay();
   }
 
@@ -936,6 +942,7 @@ const Inpaint = (() => {
     sketchC.width = dW; sketchC.height = dH;
     S.sketchCanvas = sketchC;
     S.sketchCtx    = sketchC.getContext('2d', { willReadFrequently: true });
+    S.sketchHasContent = false;
 
     const curC = q('inp-c-cur');
     curC.width = dW; curC.height = dH;
@@ -977,109 +984,6 @@ const Inpaint = (() => {
     ctx.fillRect(0, 0, out.width, out.height);
     ctx.drawImage(S.maskCanvas, 0, 0, out.width, out.height);
     return out.toDataURL('image/png');
-  }
-
-  function getMaskBBox() {
-    const w = S.maskCanvas.width, h = S.maskCanvas.height;
-    const d = S.maskCtx.getImageData(0, 0, w, h).data;
-    let x1 = w, y1 = h, x2 = 0, y2 = 0;
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        if (d[(y * w + x) * 4 + 3] > 10) {
-          if (x < x1) x1 = x; if (x > x2) x2 = x;
-          if (y < y1) y1 = y; if (y > y2) y2 = y;
-        }
-      }
-    }
-    if (x1 > x2) return null;
-    return { x1, y1, x2, y2 };
-  }
-
-  function buildOnlyMaskedPayload(targetW, targetH, padding) {
-    const bbox = getMaskBBox();
-    if (!bbox) return null;
-
-    const dW    = S.maskCanvas.width, dH = S.maskCanvas.height;
-    const scaleX = S.image.width / dW, scaleY = S.image.height / dH;
-
-    const ox1 = Math.max(0,              Math.floor((bbox.x1 - padding / scaleX) * scaleX));
-    const oy1 = Math.max(0,              Math.floor((bbox.y1 - padding / scaleY) * scaleY));
-    const ox2 = Math.min(S.image.width,  Math.ceil ((bbox.x2 + padding / scaleX) * scaleX));
-    const oy2 = Math.min(S.image.height, Math.ceil ((bbox.y2 + padding / scaleY) * scaleY));
-    const cW  = ox2 - ox1, cH = oy2 - oy1;
-
-    const initCrop = document.createElement('canvas');
-    initCrop.width = targetW; initCrop.height = targetH;
-    initCrop.getContext('2d').drawImage(S.image, ox1, oy1, cW, cH, 0, 0, targetW, targetH);
-
-    const maskOrig = document.createElement('canvas');
-    maskOrig.width = S.image.width; maskOrig.height = S.image.height;
-    const mCtx = maskOrig.getContext('2d');
-    mCtx.fillStyle = 'black'; mCtx.fillRect(0, 0, maskOrig.width, maskOrig.height);
-    mCtx.drawImage(S.maskCanvas, 0, 0, S.image.width, S.image.height);
-
-    const maskCrop = document.createElement('canvas');
-    maskCrop.width = targetW; maskCrop.height = targetH;
-    const mcCtx = maskCrop.getContext('2d');
-    mcCtx.fillStyle = 'black'; mcCtx.fillRect(0, 0, targetW, targetH);
-    mcCtx.drawImage(maskOrig, ox1, oy1, cW, cH, 0, 0, targetW, targetH);
-
-    return {
-      initImage: initCrop.toDataURL('image/png'),
-      maskImage: maskCrop.toDataURL('image/png'),
-      bbox: { ox1, oy1, cW, cH },
-    };
-  }
-
-  function recompositeResult(resultSrc, bbox) {
-    return new Promise(resolve => {
-      const img = new Image();
-      img.onload = () => {
-        const out = document.createElement('canvas');
-        out.width = S.image.width; out.height = S.image.height;
-        const ctx = out.getContext('2d');
-        ctx.drawImage(S.image, 0, 0);
-        ctx.drawImage(img, 0, 0, img.naturalWidth, img.naturalHeight,
-          bbox.ox1, bbox.oy1, bbox.cW, bbox.cH);
-        resolve(out.toDataURL('image/png'));
-      };
-      img.src = resultSrc;
-    });
-  }
-
-  // Whole-picture recomposite:
-  // 1. Draw original image at full resolution
-  // 2. Scale result (SDXL size) back to original resolution
-  // 3. Clip result to masked area using the original mask
-  // 4. Layer clipped result on top of original
-  function recompositeWhole(resultSrc) {
-    return new Promise(resolve => {
-      const img = new Image();
-      img.onload = () => {
-        const W = S.image.width, H = S.image.height;
-
-        // Scale result to original resolution
-        const resultFull = document.createElement('canvas');
-        resultFull.width = W; resultFull.height = H;
-        resultFull.getContext('2d').drawImage(img, 0, 0, W, H);
-
-        // Clip result to masked area (keep only white-mask pixels)
-        const resultCtx = resultFull.getContext('2d');
-        resultCtx.globalCompositeOperation = 'destination-in';
-        resultCtx.drawImage(S.maskCanvas, 0, 0, W, H);
-        resultCtx.globalCompositeOperation = 'source-over';
-
-        // Composite: original first, then masked result on top
-        const out = document.createElement('canvas');
-        out.width = W; out.height = H;
-        const ctx = out.getContext('2d');
-        ctx.drawImage(S.image, 0, 0);
-        ctx.drawImage(resultFull, 0, 0);
-
-        resolve(out.toDataURL('image/png'));
-      };
-      img.src = resultSrc;
-    });
   }
 
   // ── Presets ────────────────────────────────────────────────────────────────
@@ -1240,7 +1144,7 @@ const Inpaint = (() => {
       const iCtx  = imgC.getContext('2d');
       iCtx.drawImage(S.image, 0, 0);
       // Composite sketch strokes on top of the image
-      if (S.sketchCanvas) iCtx.drawImage(S.sketchCanvas, 0, 0, imgC.width, imgC.height);
+      if (S.sketchCanvas && S.sketchHasContent) iCtx.drawImage(S.sketchCanvas, 0, 0, imgC.width, imgC.height);
       const imageB64 = imgC.toDataURL('image/png');
 
       const maskC   = document.createElement('canvas');
@@ -1250,8 +1154,8 @@ const Inpaint = (() => {
       mCtx.fillStyle = 'black';
       mCtx.fillRect(0, 0, maskC.width, maskC.height);
       mCtx.drawImage(S.maskCanvas, 0, 0, maskC.width, maskC.height);
-      // Add sketch painted areas to the mask
-      if (S.sketchCanvas) {
+      // Add sketch painted areas to the mask (coûteux : skip si Sketch n'a jamais été utilisé)
+      if (S.sketchCanvas && S.sketchHasContent) {
         const skC = document.createElement('canvas');
         skC.width = S.image.width; skC.height = S.image.height;
         skC.getContext('2d').drawImage(S.sketchCanvas, 0, 0, skC.width, skC.height);
@@ -1312,15 +1216,25 @@ const Inpaint = (() => {
       }
 
       // ── Progress polling ──────────────────────────────────────────────────
+      let pollFails = 0;
       pollId = setInterval(async () => {
         try {
           const prog = await fetch(`${forgeUrl}/sdapi/v1/progress`).then(r => r.json());
+          pollFails = 0;
           if (prog.progress > 0) {
             setProgress(Math.round(prog.progress * 100));
             setStatus(`Generating… ${Math.round(prog.progress * 100)}%`);
           }
           if (prog.current_image) showLivePreview(`data:image/png;base64,${prog.current_image}`);
-        } catch { /* ignore polling errors */ }
+        } catch {
+          // Forge peut rester injoignable pendant un calcul lourd sans avoir planté —
+          // on arrête le polling au bout de quelques échecs plutôt que de spammer indéfiniment.
+          pollFails++;
+          if (pollFails >= 8) {
+            clearInterval(pollId); pollId = null;
+            setStatus('⚠ Génération en cours (aperçu indisponible — Forge ne répond plus)');
+          }
+        }
       }, 700);
 
       setStatus('Sending to Forge…');
@@ -1350,8 +1264,6 @@ const Inpaint = (() => {
       if (!resultB64) throw new Error('No image in Forge response');
 
       // Forge handles compositing (inpaint_full_res) — just show the result
-      S.pendingCrop  = null;
-      S.pendingWhole = false;
       await showResult(`data:image/png;base64,${resultB64}`);
 
     } catch (err) {
@@ -1395,14 +1307,9 @@ const Inpaint = (() => {
   }
 
   async function showResult(imgData) {
-    let src = imgData.startsWith('data:') ? imgData
-            : imgData.startsWith('http')  ? imgData
-            : `http://${API.host}/${imgData.replace(/^\//, '')}`;
-    if (S.pendingWhole) {
-      src = await recompositeWhole(src);
-    } else if (S.pendingCrop) {
-      src = await recompositeResult(src, S.pendingCrop);
-    }
+    const src = imgData.startsWith('data:') ? imgData
+              : imgData.startsWith('http')  ? imgData
+              : `http://${API.host}/${imgData.replace(/^\//, '')}`;
     const img = document.createElement('img');
     img.src   = src;
     img.title = 'Click to open fullscreen';

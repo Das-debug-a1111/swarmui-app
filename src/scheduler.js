@@ -1212,7 +1212,7 @@ const Scheduler = (() => {
       if (g) {
         const doneCount = tasks.filter(t => t.status === 'done').length;
         const allDone   = doneCount === tasks.length;
-        html += `<div class="sws-group-hdr" onclick='Scheduler._toggleGroup(${JSON.stringify(g)})'>
+        html += `<div class="sws-group-hdr" data-group="${esc(g)}">
           <span>${collapsed ? '▶' : '▼'} 📁 ${esc(g)}</span>
           <span class="sws-group-count">${tasks.length} task${tasks.length>1?'s':''}${doneCount ? ` · ${doneCount} done` : ''}${allDone?' ✓':''}</span>
         </div>`;
@@ -1256,6 +1256,9 @@ const Scheduler = (() => {
       }
     }
     list.innerHTML = html;
+    list.querySelectorAll('.sws-group-hdr').forEach(el => {
+      el.addEventListener('click', () => Scheduler._toggleGroup(el.dataset.group));
+    });
 
     const dl = document.getElementById('sws-group-list');
     if (dl) {
@@ -1419,9 +1422,6 @@ const Scheduler = (() => {
     });
     document.getElementById('sws-ctx-watermark').addEventListener('click', () => {
       if (_galCtxSrc) { closeGalCtx(); sendToWatermark(_galCtxSrc); }
-    });
-    document.getElementById('sws-ctx-img2vid').addEventListener('click', () => {
-      if (_galCtxSrc) { closeGalCtx(); sendToImg2Vid(_galCtxSrc); }
     });
     document.getElementById('sws-ctx-open').addEventListener('click', () => {
       if (_galCtxSrc) { closeGalCtx(); openLightbox(_galCtxSrc, _galCtxGrid); }

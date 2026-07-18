@@ -25,7 +25,7 @@
       <div class="tab" data-tab="scheduler">Scheduler</div>
       <div class="tab" data-tab="pnginfo">PNG Info</div>
       <div class="tab" data-tab="watermark">Watermark</div>
-      <div class="tab" data-tab="img2vid">Img2Vid</div>
+      <div class="tab" data-tab="inpaintsched">Inpaint Scheduler</div>
       <div class="tab" data-tab="models">Models</div>
     </div>
     <div id="status-bar">
@@ -77,6 +77,7 @@
           <div class="field-label">VAE</div>
           <select class="inp" id="sel-vae"><option value="">Auto</option></select>
         </div>
+        <button class="btn-secondary" id="btn-free-forge-vram" style="width:100%" title="Libère la VRAM retenue par Forge (utile si tu le fais tourner en parallèle de SwarmUI)">🧹 Libérer VRAM Forge</button>
       </div>
     </div>
 
@@ -457,6 +458,7 @@
             style="flex:1;font-size:10px;font-family:monospace">
           <button class="inp-btn-sm" id="inp-forge-reconnect" title="Reconnect to Forge">↺</button>
         </div>
+        <button class="inp-btn-sm" id="inp-free-swarm-vram" style="width:100%;margin-top:5px" title="Libère la VRAM retenue par SwarmUI (à faire toi-même avant une session Forge, pas automatique)">🧹 Libérer VRAM SwarmUI</button>
         <div class="inp-col-lbl" style="margin-top:7px">Presets</div>
         <div style="display:flex;gap:5px">
           <select class="inp-sel" id="inpp-preset-sel" style="flex:1;min-width:0"></select>
@@ -1002,7 +1004,6 @@
   <div id="sws-gal-ctx">
     <div class="sws-ctx-item" id="sws-ctx-inpaint">🖌 Send to Inpaint</div>
     <div class="sws-ctx-item" id="sws-ctx-watermark">💧 Send to Watermark</div>
-    <div class="sws-ctx-item" id="sws-ctx-img2vid">🎬 Send to Img2Vid</div>
     <div class="sws-ctx-item" id="sws-ctx-open">🔍 Open fullscreen</div>
     <div class="sws-ctx-item" id="sws-ctx-dl">⬇ Download</div>
   </div>
@@ -1014,7 +1015,6 @@
   <div id="inp-ctx-menu">
     <div class="inp-ctx-item" id="inp-ctx-use">🖼 Use as init image</div>
     <div class="inp-ctx-item" id="inp-ctx-watermark">💧 Send to Watermark</div>
-    <div class="inp-ctx-item" id="inp-ctx-img2vid">🎬 Send to Img2Vid</div>
     <div class="inp-ctx-item" id="inp-ctx-dl">⬇ Download</div>
   </div>
 
@@ -1069,177 +1069,174 @@
   </div>
 </div>
 
-  <!-- ── Img2Vid view ──────────────────────────────────────────────────────── -->
-  <div id="view-img2vid">
+  <!-- ── Inpaint Scheduler view ───────────────────────────────────────────── -->
+  <div id="view-ips">
 
-    <!-- Left panel: image + settings -->
-    <div id="i2v-left">
+    <!-- Left: shared settings -->
+    <div id="ips-left">
+      <div class="sws-toolbar">
+        <button class="sws-btn primary" id="ips-btn-add">＋ Ajouter des images</button>
+        <input type="file" id="ips-file-input" accept="image/*" multiple style="display:none">
+        <button class="sws-btn success" id="ips-btn-run" disabled>▶ Run</button>
+        <button class="sws-btn warning" id="ips-btn-pause" disabled>⏸ Pause</button>
+        <button class="sws-btn danger"  id="ips-btn-stop" disabled>⏹ Stop</button>
+        <button class="sws-btn sm" id="ips-btn-reset" title="Remettre les images terminées/en erreur en attente">↺ Reset</button>
+        <button class="sws-btn sm" id="ips-btn-clear">🗑 Vider</button>
+      </div>
 
-      <!-- Image area -->
-      <div id="i2v-image-area">
-        <div id="i2v-drop-zone">
-          <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" style="opacity:.4;margin-bottom:8px">
-            <rect x="3" y="3" width="18" height="18" rx="2"/>
-            <circle cx="8.5" cy="8.5" r="1.5"/>
-            <path d="M3 15l5-5 4 4 3-3 6 6"/>
-          </svg>
-          <span style="font-size:12px;color:var(--muted)">Drop image, paste, or</span>
-          <button id="i2v-drop-btn" class="btn-secondary" style="margin-top:6px;padding:4px 12px">Browse…</button>
-          <input type="file" id="i2v-file-input" accept="image/*" style="display:none">
+      <div class="ips-panel">
+        <div style="display:flex;align-items:center;gap:5px">
+          <span class="inp-col-lbl" style="margin:0;flex:1">Forge</span>
+          <span id="ips-forge-indicator" style="font-size:10px;color:var(--muted)">● Offline</span>
         </div>
-        <div id="i2v-thumb-sec" style="display:none">
-          <img id="i2v-preview-img" alt="source image">
-          <button id="i2v-clear-btn" title="Clear image">✕</button>
+        <div style="display:flex;gap:5px">
+          <input type="text" class="inp-field" id="ips-forge-url"
+            value="http://192.168.8.67:58190"
+            placeholder="http://host:port"
+            style="flex:1;font-size:10px;font-family:monospace">
+          <button class="inp-btn-sm" id="ips-forge-reconnect" title="Reconnect to Forge">↺</button>
+        </div>
+        <button class="inp-btn-sm" id="ips-free-swarm-vram" style="width:100%;margin-top:5px" title="Libère la VRAM retenue par SwarmUI (manuel, pas automatique)">🧹 Libérer VRAM SwarmUI</button>
+      </div>
+
+      <div class="ips-panel">
+        <div class="inp-col-lbl">Presets</div>
+        <div style="display:flex;gap:5px">
+          <select class="inp-sel" id="ips-preset-sel" style="flex:1;min-width:0"></select>
+          <button class="inp-btn-sm" id="ips-preset-load">Load</button>
+          <button class="inp-btn-sm inp-btn-danger" id="ips-preset-del">✕</button>
+        </div>
+        <div style="display:flex;gap:5px;margin-top:4px">
+          <input type="text" class="inp-field" id="ips-preset-name" placeholder="Preset name…" style="flex:1">
+          <button class="inp-btn-sm inp-btn-green" id="ips-preset-save">Save</button>
         </div>
       </div>
 
-      <!-- Settings (scrollable) -->
-      <div id="i2v-settings">
-
-        <!-- Prompt -->
-        <div class="field">
-          <div class="field-label">Prompt</div>
-          <textarea class="inp" id="i2v-prompt" rows="3" style="resize:vertical;min-height:56px;user-select:text" placeholder="Describe the motion… (e.g. slow wind, gentle waves)"></textarea>
+      <div class="ips-panel">
+        <div class="inp-col-lbl">Model</div>
+        <select class="inp-sel" id="ips-sel-model"><option value="">— Connect first —</option></select>
+        <select class="inp-sel" id="ips-sampler"></select>
+        <select class="inp-sel" id="ips-scheduler"></select>
+        <div class="inp-bcol-row">
+          <div class="inp-bcol-lrow"><span>Steps</span><span class="inp-val" id="ips-steps-val">20</span></div>
+          <input type="range" class="inp-slider" id="ips-steps" min="1" max="150" step="1" value="20">
         </div>
-
-        <!-- Negative -->
-        <div class="field">
-          <div class="field-label">Negative prompt</div>
-          <textarea class="inp" id="i2v-neg" rows="2" style="resize:vertical;min-height:40px;user-select:text" placeholder="fast movements, blurry, static…"></textarea>
+        <div class="inp-bcol-row">
+          <div class="inp-bcol-lrow"><span>CFG Scale</span><span class="inp-val" id="ips-cfg-val">6.0</span></div>
+          <input type="range" class="inp-slider" id="ips-cfg" min="1" max="30" step="0.5" value="6">
         </div>
-
-        <!-- Resolution -->
-        <div class="field">
-          <div class="field-label">Resolution</div>
-          <select class="inp" id="i2v-resolution">
-            <option value="832x480">832 × 480 — 16:9 landscape</option>
-            <option value="480x832">480 × 832 — 9:16 portrait</option>
-            <option value="1280x720">1280 × 720 — 720p landscape</option>
-            <option value="720x1280">720 × 1280 — 720p portrait</option>
-            <option value="880x480">880 × 480 — wide landscape</option>
-            <option value="480x880">480 × 880 — tall portrait</option>
-            <option value="880x1120" selected>880 × 1120 — WAN default portrait</option>
-            <option value="1120x880">1120 × 880 — WAN default landscape</option>
-          </select>
+        <div class="inp-bcol-row">
+          <div class="inp-bcol-lrow"><span>Denoising</span><span class="inp-val" id="ips-denoise-val">0.75</span></div>
+          <input type="range" class="inp-slider" id="ips-denoise" min="0" max="1" step="0.01" value="0.75">
         </div>
-
-        <!-- Duration -->
-        <div class="field">
-          <div class="field-label">Duration (seconds) <span id="i2v-dur-val">3</span>s</div>
-          <input type="range" id="i2v-dur" class="slider" min="1" max="10" step="1" value="3">
+        <div class="inp-bcol-row">
+          <div class="inp-bcol-lrow"><span>Mask blur</span><span class="inp-val" id="ips-mblur-val">4</span></div>
+          <input type="range" class="inp-slider" id="ips-mblur" min="0" max="64" step="1" value="4">
         </div>
-
-        <!-- Steps -->
-        <div class="field" id="i2v-steps-group">
-          <div class="field-label">Steps <span id="i2v-steps-val">20</span></div>
-          <input type="range" id="i2v-steps" class="slider" min="5" max="50" step="1" value="20">
+        <div class="inp-col-lbl" style="margin-top:4px">Fill content</div>
+        <select class="inp-sel" id="ips-fill-mode">
+          <option value="1" selected>Original</option>
+          <option value="3">Latent nothing</option>
+          <option value="2">Latent noise</option>
+          <option value="0">Fill (blend)</option>
+        </select>
+        <div class="inp-col-lbl" style="margin-top:4px">Inpaint area (défaut nouvelles images)</div>
+        <div class="inp-radios">
+          <input type="radio" name="ips-area" id="ips-area-whole" value="whole">
+          <label for="ips-area-whole">Whole</label>
+          <input type="radio" name="ips-area" id="ips-area-masked" value="only_masked" checked>
+          <label for="ips-area-masked">Only masked</label>
         </div>
-
-        <!-- CFG -->
-        <div class="field">
-          <div class="field-label">CFG <span id="i2v-cfg-val">6</span></div>
-          <input type="range" id="i2v-cfg" class="slider" min="1" max="12" step="0.5" value="6">
-        </div>
-
-        <!-- FPS + Sampler row -->
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-          <div class="field">
-            <div class="field-label">FPS</div>
-            <select class="inp" id="i2v-fps">
-              <option value="6" selected>6 fps</option>
-              <option value="8">8 fps</option>
-              <option value="16">16 fps</option>
-              <option value="24">24 fps</option>
-            </select>
-          </div>
-          <div class="field">
-            <div class="field-label">Sampler</div>
-            <select class="inp" id="i2v-sampler">
-              <option value="euler" selected>euler</option>
-              <option value="dpm_2">dpm_2</option>
-              <option value="dpm_2_ancestral">dpm_2a</option>
-              <option value="uni_pc">uni_pc</option>
-            </select>
-          </div>
-        </div>
-
-        <!-- Scheduler -->
-        <div class="field">
-          <div class="field-label">Scheduler</div>
-          <select class="inp" id="i2v-scheduler">
-            <option value="simple" selected>simple</option>
-            <option value="normal">normal</option>
-            <option value="karras">karras</option>
-            <option value="sgm_uniform">sgm_uniform</option>
-          </select>
-        </div>
-
-        <!-- Seed -->
-        <div class="field">
-          <div class="field-label">Seed</div>
-          <div class="seed-row">
-            <input type="number" class="inp" id="i2v-seed" value="-1" min="-1">
-            <button class="btn-sm" id="i2v-seed-reset" title="Reset to random">🎲</button>
-          </div>
-        </div>
-
-        <!-- Speed mode -->
-        <div class="field" style="display:flex;align-items:center;gap:8px;padding:6px 0">
-          <label class="i2v-toggle">
-            <input type="checkbox" id="i2v-speed-toggle">
-            <span class="i2v-toggle-track"></span>
-          </label>
-          <div>
-            <div style="font-size:12px;font-weight:600;color:var(--text2)">⚡ Speed mode</div>
-            <div style="font-size:11px;color:var(--muted)">Lightning Accelerator — 4 steps, faster</div>
-          </div>
-        </div>
-
-      </div><!-- /i2v-settings -->
-
-      <!-- Generate footer -->
-      <div id="i2v-gen-footer">
-        <div id="i2v-progress-wrap">
-          <div id="i2v-pbar"></div>
-        </div>
-        <div id="i2v-status"></div>
-        <button id="i2v-gen-btn" class="i2v-gen-btn" disabled>▶ Generate</button>
-      </div>
-
-    </div><!-- /i2v-left -->
-
-    <!-- Right panel: setup or output -->
-    <div id="i2v-right">
-
-      <!-- Setup required panel -->
-      <div id="i2v-setup-panel" style="display:none">
-        <div class="i2v-setup-inner">
-          <div style="font-size:24px;margin-bottom:8px">🎬</div>
-          <h3 style="margin-bottom:4px;font-size:14px">WAN 2.2 I2V Setup Required</h3>
-          <div id="i2v-setup-body" style="margin:12px 0;text-align:left;font-size:12px;color:var(--text2)">
-            Checking models…
-          </div>
-          <button id="i2v-setup-retry" class="btn-secondary" style="margin-top:8px">↻ Re-check</button>
+        <div class="inp-bcol-row" style="margin-top:4px">
+          <div class="inp-bcol-lrow"><span>Padding px</span><span class="inp-val" id="ips-pad-val">32</span></div>
+          <input type="range" class="inp-slider" id="ips-pad" min="0" max="256" step="4" value="32">
         </div>
       </div>
 
-      <!-- Main output area -->
-      <div id="i2v-main">
-        <div id="i2v-output-placeholder">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" style="opacity:.2;margin-bottom:12px">
-            <polygon points="5 3 19 12 5 21 5 3"/>
-          </svg>
-          <span style="font-size:12px;color:var(--muted)">Video will appear here</span>
-        </div>
-        <video id="i2v-output-video" controls loop playsinline style="display:none;max-width:100%;max-height:100%;border-radius:6px"></video>
-        <div id="i2v-video-actions" style="display:none">
-          <button id="i2v-download-btn" class="btn-secondary">⬇ Download MP4</button>
+      <div class="ips-panel" style="flex:1">
+        <div class="inp-col-lbl">Prompt par défaut (nouvelles images)</div>
+        <textarea class="inp-ta" id="ips-prompt" rows="3" placeholder="Positive prompt…" style="flex:1"></textarea>
+        <textarea class="inp-ta" id="ips-neg" rows="2" placeholder="Negative…" style="margin-top:4px"></textarea>
+        <div style="font-size:10px;color:var(--muted);margin-top:2px">Modifiable par image dans l'éditeur de masque (✏ Masque)</div>
+      </div>
+    </div><!-- /ips-left -->
+
+    <!-- Middle: queue grid / mask editor -->
+    <div id="ips-main">
+      <div id="ips-queue-view">
+        <div class="sws-queue-header"><span>Queue</span><span id="ips-count">0 images</span></div>
+        <div id="ips-grid"><div class="sws-empty">Aucune image — clique ＋ Ajouter des images.</div></div>
+        <div class="sws-progress">
+          <div class="sws-prog-label">Statut <span id="ips-qcounter" style="float:right"></span></div>
+          <div class="sws-prog-name" id="ips-prog-name" style="color:var(--muted)">Idle</div>
+          <div class="sws-prog-track"><div class="sws-prog-bar" id="ips-prog-bar"></div></div>
+          <div class="sws-prog-row"><span id="ips-prog-pct">0%</span><span id="ips-prog-status"></span></div>
         </div>
       </div>
+      <div id="ips-mask-editor">
+        <div id="ips-editor-toolbar">
+          <button class="inp-tbtn on" id="ips-brush-btn">🖌 Brush</button>
+          <button class="inp-tbtn" id="ips-eraser-btn">◻ Eraser</button>
+          <button class="inp-tbtn" id="ips-undo-btn">↩ Undo</button>
+          <button class="inp-tbtn" id="ips-clear-btn">🗑 Clear</button>
+          <button class="inp-tbtn" id="ips-invert-btn">⊕ Invert</button>
+          <span class="inp-sep"></span>
+          <label class="inp-tlbl">Size <span id="ips-brush-val">40</span>px</label>
+          <input type="range" id="ips-brush-range" min="1" max="200" value="40">
+          <label class="inp-tlbl">Preview</label>
+          <input type="range" id="ips-opacity-range" min="10" max="95" value="72">
+          <span class="inp-sep"></span>
+          <button class="sws-btn sm" id="ips-editor-back">← Retour</button>
+          <button class="sws-btn success sm" id="ips-editor-done">✓ Done</button>
+        </div>
+        <div id="ips-editor-prompts">
+          <textarea class="inp-ta" id="ips-item-prompt" rows="2" placeholder="Prompt pour cette image…"></textarea>
+          <textarea class="inp-ta" id="ips-item-neg" rows="2" placeholder="Negative…"></textarea>
+        </div>
+        <div id="ips-editor-settings">
+          <div class="inp-radios">
+            <input type="radio" name="ips-item-area" id="ips-item-area-whole" value="whole">
+            <label for="ips-item-area-whole">Whole</label>
+            <input type="radio" name="ips-item-area" id="ips-item-area-masked" value="only_masked" checked>
+            <label for="ips-item-area-masked">Only masked</label>
+          </div>
+          <div class="inp-ratio-grid" id="ips-item-ratio-grid">
+            <button class="inp-rbtn" id="ips-item-auto-ratio" type="button">🎯 Auto</button>
+            <button class="inp-rbtn" data-w="1152" data-h="768"  type="button">3:2</button>
+            <button class="inp-rbtn" data-w="768"  data-h="1152" type="button">2:3</button>
+            <button class="inp-rbtn" data-w="1344" data-h="768"  type="button">16:9</button>
+            <button class="inp-rbtn" data-w="768"  data-h="1344" type="button">9:16</button>
+            <button class="inp-rbtn" data-w="1024" data-h="1024" type="button">1:1</button>
+          </div>
+          <div style="display:flex;gap:6px;align-items:center">
+            <input type="number" class="inp-field" id="ips-item-w" value="1024" min="64" max="4096" step="64" style="width:70px;text-align:center">
+            <span style="color:var(--muted)">×</span>
+            <input type="number" class="inp-field" id="ips-item-h" value="1024" min="64" max="4096" step="64" style="width:70px;text-align:center">
+          </div>
+        </div>
+        <div id="ips-canvas-wrap">
+          <div id="ips-stack">
+            <canvas id="ips-c-img"></canvas>
+            <canvas id="ips-c-mask"></canvas>
+            <canvas id="ips-c-cur"></canvas>
+          </div>
+        </div>
+      </div>
+    </div><!-- /ips-main -->
 
-    </div><!-- /i2v-right -->
+    <!-- Right: Generated results -->
+    <div id="ips-right">
+      <div class="sws-gallery-hdr">
+        <span>Generated</span>
+        <div style="display:flex;gap:5px">
+          <button class="sws-btn sm" id="ips-dl-all">⬇ All</button>
+          <button class="sws-btn sm" id="ips-gal-clear">🗑 Clear</button>
+        </div>
+      </div>
+      <div id="ips-gallery"><div class="sws-gal-empty">Images will appear here</div></div>
+    </div>
 
-  </div><!-- /view-img2vid -->
+  </div><!-- /view-ips -->
 
   <!-- ── Model Downloader ──────────────────────────────────────────────────── -->
   <div id="view-models">
@@ -1356,7 +1353,7 @@
 <script src="src/inpaint.js"></script>
 <script src="src/scheduler.js"></script>
 <script src="src/watermark.js"></script>
-<script src="src/img2vid.js"></script>
+<script src="src/inpaintScheduler.js"></script>
 <script src="src/app.js"></script>
 </body>
 </html>

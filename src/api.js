@@ -49,6 +49,12 @@ const API = {
     return this.post('/API/TriggerRefresh', { session_id: this.session, strong });
   },
 
+  // ── Libérer la VRAM/RAM des backends SwarmUI (utile avant de générer sur Forge) ─
+  async freeBackendMemory(systemRam = false) {
+    if (!this.session) return null;
+    return this.post('/API/FreeBackendMemory', { session_id: this.session, system_ram: systemRam, backend: 'all' });
+  },
+
   // ── Generate via WebSocket ────────────────────────────────────────────────────
   generate(payload, { onProgress, onPreview, onImage, onDone, onError } = {}) {
     if (this._ws) { try { this._ws.close(); } catch {} }
@@ -92,6 +98,7 @@ const API = {
     ws.onerror = () => { gotError = true; onError?.('WebSocket error'); };
     ws.onclose = () => {
       this._ws = null;
+      if (ws._interrupted) return;
       if (gotError) return;
       // SwarmUI ferme le socket après msg.image sans forcément envoyer msg.done
       if (gotDone || gotImage) onDone?.();
@@ -101,7 +108,7 @@ const API = {
   },
 
   interrupt() {
-    if (this._ws) { this._ws.close(); this._ws = null; }
+    if (this._ws) { this._ws._interrupted = true; this._ws.close(); this._ws = null; }
     return this.post('/API/InterruptAll', { session_id: this.session });
   },
 

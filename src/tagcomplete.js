@@ -386,10 +386,12 @@ const TagComplete = (() => {
       setActive(Math.max(activeIdx - 1, -1));
     } else if (e.key === 'Tab') {
       // Tab always picks from autocomplete if dropdown is open (first item if none selected)
+      if (!rows.length) return;
       e.preventDefault();
       const idx = activeIdx >= 0 ? activeIdx : 0;
       rows[idx].dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     } else if (e.key === 'Enter' && activeIdx >= 0) {
+      if (!rows[activeIdx]) return;
       e.preventDefault();
       rows[activeIdx].dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     } else if (e.key === 'Escape') {

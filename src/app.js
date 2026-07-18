@@ -165,7 +165,6 @@ async function loadAll() {
     loadRefinerModels(),
     loadCNModels(),
   ]);
-  Img2Vid.onConnect();
 }
 
 async function loadCNModels() {
@@ -381,6 +380,7 @@ $('chk-cn').addEventListener('change', () => {
 });
 
 let _cnImageData = null;
+let _stallTimer   = null;
 
 function setCNImage(dataUrl) {
   _cnImageData = dataUrl;
@@ -526,6 +526,22 @@ $('btn-reload-loras').addEventListener('click', async () => {
   }
 });
 
+$('btn-free-forge-vram').addEventListener('click', async () => {
+  const forgeUrl = (localStorage.getItem('forge-url') || '').replace(/\/$/, '');
+  if (!forgeUrl) { showErrorToast('Aucune URL Forge enregistrée (configure-la dans Inpaint)'); return; }
+  const btn = $('btn-free-forge-vram');
+  btn.disabled = true;
+  try {
+    const resp = await fetch(`${forgeUrl}/sdapi/v1/unload-checkpoint`, { method: 'POST' });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    toast('✅ VRAM Forge libérée');
+  } catch (e) {
+    showErrorToast(`Forge injoignable: ${e.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 // ── Generate ──────────────────────────────────────────────────────────────────
 $('btn-generate').addEventListener('click', () => {
   if (!App.connected) return;
@@ -548,6 +564,16 @@ function startGeneration() {
   setProgress(0, 'Starting…');
   // Effacer l'erreur précédente
   $('gen-error-toast')?.classList.remove('visible');
+
+  // Si aucun message de progression n'arrive après 15s (chargement du modèle
+  // ControlNet par ex.), rassurer l'utilisateur plutôt que de laisser "Starting…"
+  // figé — évite qu'il interrompe une génération qui tourne encore normalement.
+  clearTimeout(_stallTimer);
+  _stallTimer = setTimeout(() => {
+    if (App.running) {
+      $('progress-label').textContent = 'Toujours en cours… (le chargement d\'un modèle ControlNet peut prendre 30-90s la 1ère fois)';
+    }
+  }, 15000);
 
   // Build LoRA prompt suffix
   const loraSuffix = App.loraItems
@@ -616,6 +642,7 @@ function startGeneration() {
 
   API.generate(payload, {
     onProgress(status, pct) {
+      clearTimeout(_stallTimer);
       const label = typeof status === 'string' ? status : (status?.title || status?.stage || 'Generating…');
       // overall_percent can stay 0 with ComfyUI backend — use step-based progress if available
       const displayPct = pct > 0 ? pct : (status?.cur_step && status?.total_steps
@@ -632,7 +659,8 @@ function startGeneration() {
       el.src = dataUrl;
       el.style.display = 'block';
       $('gallery').prepend(el); // toujours épinglé en premier
-      $('gallery-empty').style.display = 'none';
+      const emptyEl = $('gallery-empty');
+      if (emptyEl) emptyEl.style.display = 'none';
     },
     onImage(imgData) {
       // Hide live preview when final image arrives
@@ -659,6 +687,7 @@ function startGeneration() {
       finishGeneration();
     },
     onError(err) {
+      clearTimeout(_stallTimer);
       console.error('Generation error:', err);
       App.running = false;
       $('btn-generate').textContent = 'Generate';
@@ -725,6 +754,7 @@ function toast(msg) {
 
 function finishGeneration() {
   if (!App.running) return;
+  clearTimeout(_stallTimer);
   App.running = false;
   $('btn-generate').textContent = 'Generate';
   $('btn-generate').classList.remove('running');
@@ -769,13 +799,12 @@ function addImageToGallery(img, groupLabel, isFirst) {
   const div = document.createElement('div');
   div.className = 'gallery-img';
   div.innerHTML = `
-    <img src="${img.url}" alt="Generated image" loading="lazy">
+    <img src="${esc(img.url)}" alt="Generated image" loading="lazy">
     <div class="gallery-img-actions">
       <button class="gal-btn" data-action="seed"      title="Use this seed">🎲</button>
       <button class="gal-btn" data-action="inpaint"   title="Inpaint">🖌</button>
       <button class="gal-btn" data-action="schedule"  title="Send to Scheduler">📅</button>
       <button class="gal-btn" data-action="watermark" title="Send to Watermark">💧</button>
-      <button class="gal-btn" data-action="img2vid"   title="Send to Img2Vid">🎬</button>
       <button class="gal-btn" data-action="info"      title="Image info">ℹ</button>
       <button class="gal-btn" data-action="save"      title="Save image">💾</button>
     </div>`;
@@ -798,10 +827,6 @@ function addImageToGallery(img, groupLabel, isFirst) {
   div.querySelector('[data-action="watermark"]').addEventListener('click', e => {
     e.stopPropagation();
     sendToWatermark(img.url);
-  });
-  div.querySelector('[data-action="img2vid"]').addEventListener('click', e => {
-    e.stopPropagation();
-    sendToImg2Vid(img.url);
   });
   div.querySelector('[data-action="info"]').addEventListener('click', e => {
     e.stopPropagation();
@@ -1326,7 +1351,7 @@ function switchTab(tab) {
   const isSch  = tab === 'scheduler';
   const isPng  = tab === 'pnginfo';
   const isWm   = tab === 'watermark';
-  const isI2V  = tab === 'img2vid';
+  const isIps  = tab === 'inpaintsched';
   const isMdl  = tab === 'models';
 
   $('view-txt2img').style.display = isTxt ? 'contents' : 'none';
@@ -1334,13 +1359,13 @@ function switchTab(tab) {
   $('view-scheduler').classList.toggle('active', isSch);
   $('view-pnginfo').classList.toggle('active', isPng);
   $('view-watermark').classList.toggle('active', isWm);
-  $('view-img2vid').classList.toggle('active', isI2V);
+  $('view-ips').classList.toggle('active', isIps);
   $('view-models').classList.toggle('active', isMdl);
 
   if (isInp) { Inpaint.init(); Inpaint.onShow(); }
   if (isSch) { Scheduler.init(); Scheduler.onShow(); }
   if (isWm)  { Watermark.init(); }
-  if (isI2V) { Img2Vid.onShow(); }
+  if (isIps) { InpaintScheduler.init(); InpaintScheduler.onShow(); }
   if (isMdl) { ModelDL.onShow(); }
 }
 
@@ -1358,20 +1383,6 @@ function sendToInpaint(url) {
 function sendToWatermark(url) {
   switchTab('watermark');
   Watermark.loadFromSrc(url);
-}
-
-// ── Send to Img2Vid (from gallery / inpaint / scheduler) ─────────────────────
-function sendToImg2Vid(url) {
-  switchTab('img2vid');
-  // Convert URL to dataUrl for Img2Vid
-  fetch(url)
-    .then(r => r.blob())
-    .then(blob => {
-      const reader = new FileReader();
-      reader.onload = e => Img2Vid.receiveImage(e.target.result);
-      reader.readAsDataURL(blob);
-    })
-    .catch(err => console.error('[sendToImg2Vid]', err));
 }
 
 // ── Send to Scheduler (from gallery) ─────────────────────────────────────────
