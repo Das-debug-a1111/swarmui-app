@@ -811,12 +811,13 @@ const Comic = (() => {
     const style = q('comic-bubble-style').value;
     const font = q('comic-bubble-font').value;
     const textColor = q('comic-text-color').value;
+    const fontSize = +q('comic-text-size').value;
     const w = S.project.canvasWidth * 0.3, h = S.project.canvasHeight * 0.15;
     const bubble = {
       id: genId(), type: 'bubble',
       x: (S.project.canvasWidth - w) / 2, y: (S.project.canvasHeight - h) / 2,
       w, h, rotation: 0, style,
-      text: 'Texte…', font, fontSize: Math.max(16, Math.min(w, h) * 0.18),
+      text: 'Texte…', font, fontSize,
       textColor, fillColor: '#ffffff', borderColor: '#000000',
     };
     S.project.objects.push(bubble);
@@ -830,9 +831,13 @@ const Comic = (() => {
       q('comic-bubble-font').value = obj.font || 'Arial';
       q('comic-text-color').value = obj.textColor || '#000000';
       q('comic-bubble-style').value = obj.style || 'speech';
+      q('comic-text-size').value = Math.round(obj.fontSize || 32);
+      q('comic-text-size-val').textContent = Math.round(obj.fontSize || 32) + 'px';
     } else if (obj.type === 'sfx') {
       q('comic-bubble-font').value = obj.font || 'Impact';
       q('comic-text-color').value = obj.textColor || '#ffffff';
+      q('comic-text-size').value = Math.round(obj.fontSize || 32);
+      q('comic-text-size-val').textContent = Math.round(obj.fontSize || 32) + 'px';
     }
   }
 
@@ -840,14 +845,16 @@ const Comic = (() => {
     pushUndo();
     const background = q('comic-sfx-bg').value;
     const font = q('comic-bubble-font').value;
+    const textColor = q('comic-text-color').value;
+    const fontSize = +q('comic-text-size').value;
     const text = q('comic-sfx-preset').value || 'BOOM!';
     const w = S.project.canvasWidth * 0.28, h = S.project.canvasHeight * 0.16;
     const sfx = {
       id: genId(), type: 'sfx',
       x: (S.project.canvasWidth - w) / 2, y: (S.project.canvasHeight - h) / 2,
       w, h, rotation: 0,
-      text, font, fontSize: Math.max(24, Math.min(w, h) * 0.4),
-      textColor: '#ffffff', outlineColor: '#000000', outlineWidth: null,
+      text, font, fontSize,
+      textColor, outlineColor: '#000000', outlineWidth: null,
       background, fillColor: '#ffeb3b',
     };
     S.project.objects.push(sfx);
@@ -1131,11 +1138,16 @@ const Comic = (() => {
     });
     q('comic-bubble-font').addEventListener('change', function () {
       const sel = S.selectedId && findObject(S.selectedId);
-      if (sel && sel.type === 'bubble') { sel.font = this.value; render(); }
+      if (sel && (sel.type === 'bubble' || sel.type === 'sfx')) { sel.font = this.value; render(); }
     });
     q('comic-text-color').addEventListener('input', function () {
       const sel = S.selectedId && findObject(S.selectedId);
-      if (sel && sel.type === 'bubble') { sel.textColor = this.value; render(); }
+      if (sel && (sel.type === 'bubble' || sel.type === 'sfx')) { sel.textColor = this.value; render(); }
+    });
+    q('comic-text-size').addEventListener('input', function () {
+      q('comic-text-size-val').textContent = this.value + 'px';
+      const sel = S.selectedId && findObject(S.selectedId);
+      if (sel && (sel.type === 'bubble' || sel.type === 'sfx')) { sel.fontSize = +this.value; render(); }
     });
     q('comic-border-width').addEventListener('input', function () {
       q('comic-border-width-val').textContent = this.value + 'px';
