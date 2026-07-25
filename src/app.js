@@ -824,6 +824,7 @@ function addImageToGallery(img, groupLabel, isFirst) {
       <button class="gal-btn" data-action="inpaint"   title="Inpaint">🖌</button>
       <button class="gal-btn" data-action="schedule"  title="Send to Scheduler">📅</button>
       <button class="gal-btn" data-action="watermark" title="Send to Watermark">💧</button>
+      <button class="gal-btn" data-action="comic"     title="Send to Comic">🎬</button>
       <button class="gal-btn" data-action="info"      title="Image info">ℹ</button>
       <button class="gal-btn" data-action="copy"      title="Copy image (Discord, etc.)">📋</button>
       <button class="gal-btn" data-action="save"      title="Save image">💾</button>
@@ -847,6 +848,10 @@ function addImageToGallery(img, groupLabel, isFirst) {
   div.querySelector('[data-action="watermark"]').addEventListener('click', e => {
     e.stopPropagation();
     sendToWatermark(img.url);
+  });
+  div.querySelector('[data-action="comic"]').addEventListener('click', e => {
+    e.stopPropagation();
+    sendToComic(img.url);
   });
   div.querySelector('[data-action="info"]').addEventListener('click', e => {
     e.stopPropagation();
@@ -1409,7 +1414,8 @@ function switchTab(tab) {
   const isInp  = tab === 'inpaint';
   const isSch  = tab === 'scheduler';
   const isPng  = tab === 'pnginfo';
-  const isWm   = tab === 'watermark';
+  const isWm    = tab === 'watermark';
+  const isComic = tab === 'comic';
   const isIps  = tab === 'inpaintsched';
   const isMdl  = tab === 'models';
 
@@ -1418,14 +1424,16 @@ function switchTab(tab) {
   $('view-scheduler').classList.toggle('active', isSch);
   $('view-pnginfo').classList.toggle('active', isPng);
   $('view-watermark').classList.toggle('active', isWm);
+  $('view-comic').classList.toggle('active', isComic);
   $('view-ips').classList.toggle('active', isIps);
   $('view-models').classList.toggle('active', isMdl);
 
-  if (isInp) { Inpaint.init(); Inpaint.onShow(); }
-  if (isSch) { Scheduler.init(); Scheduler.onShow(); }
-  if (isWm)  { Watermark.init(); }
-  if (isIps) { InpaintScheduler.init(); InpaintScheduler.onShow(); }
-  if (isMdl) { ModelDL.onShow(); }
+  if (isInp)   { Inpaint.init(); Inpaint.onShow(); }
+  if (isSch)   { Scheduler.init(); Scheduler.onShow(); }
+  if (isWm)    { Watermark.init(); }
+  if (isComic) { Comic.init(); Comic.onShow(); }
+  if (isIps)   { InpaintScheduler.init(); InpaintScheduler.onShow(); }
+  if (isMdl)   { ModelDL.onShow(); }
 }
 
 document.querySelectorAll('.tab').forEach(tab => {
@@ -1442,6 +1450,12 @@ function sendToInpaint(url) {
 function sendToWatermark(url) {
   switchTab('watermark');
   Watermark.loadFromSrc(url);
+}
+
+// ── Send to Comic (from gallery) ─────────────────────────────────────────────
+function sendToComic(url) {
+  switchTab('comic');
+  Comic.loadFromSrc(url);
 }
 
 // ── Send to Scheduler (from gallery) ─────────────────────────────────────────

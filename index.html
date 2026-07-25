@@ -25,6 +25,7 @@
       <div class="tab" data-tab="scheduler">Scheduler</div>
       <div class="tab" data-tab="pnginfo">PNG Info</div>
       <div class="tab" data-tab="watermark">Watermark</div>
+      <div class="tab" data-tab="comic">Comic</div>
       <div class="tab" data-tab="inpaintsched">Inpaint Scheduler</div>
       <div class="tab" data-tab="models">Models</div>
     </div>
@@ -924,19 +925,56 @@
   <div id="view-watermark">
 
     <div id="wm-toolbar">
-      <button class="wm-tbtn" id="wm-load-base-tb">🖼 Image</button>
-      <button class="wm-tbtn" id="wm-load-wm">💧 Load Watermark</button>
+      <button class="wm-tbtn" id="wm-load-base-tb">🖼 Add Images</button>
+      <input type="file" id="wm-file-input" accept="image/*" multiple style="display:none">
+      <span class="wm-sep"></span>
+
+      <label class="wm-tlbl"><input type="checkbox" id="wm-enable-logo" checked> Logo</label>
+      <button class="wm-tbtn" id="wm-load-wm">💧 Load Logo</button>
       <span id="wm-wm-status" class="wm-status-label"></span>
       <button class="wm-tbtn wm-tbtn-danger" id="wm-clear-wm" style="display:none">✕</button>
       <input type="file" id="wm-wm-file-input" accept="image/*,.kra" style="display:none">
-      <span class="wm-sep"></span>
       <label class="wm-tlbl">Opacity <span id="wm-opacity-val">80%</span></label>
       <input type="range" id="wm-opacity" min="0" max="1" step="0.01" value="0.8">
-      <label class="wm-tlbl">Scale <span id="wm-scale-val">1.00×</span></label>
-      <input type="range" id="wm-scale" min="0.1" max="3" step="0.05" value="1">
+      <label class="wm-tlbl">Size <span id="wm-scale-val">20%</span></label>
+      <input type="range" id="wm-scale" min="0.02" max="1" step="0.01" value="0.2">
+      <label class="wm-tlbl">Rotate <span id="wm-rotate-val">0°</span></label>
+      <input type="range" id="wm-rotate" min="0" max="360" step="1" value="0">
       <span class="wm-sep"></span>
-      <button class="wm-tbtn" id="wm-copy" title="Copy image (Discord, etc.)">📋 Copy</button>
-      <button class="wm-tbtn wm-tbtn-primary" id="wm-export">⬇ Export PNG</button>
+
+      <label class="wm-tlbl"><input type="checkbox" id="wm-enable-text"> Text</label>
+      <input type="text" class="wm-text-ctrl wm-text-input" id="wm-text-content" placeholder="Watermark text…" style="display:none">
+      <select class="wm-text-ctrl wm-text-input" id="wm-text-font" style="display:none">
+        <option value="Arial">Arial</option>
+        <option value="Georgia">Georgia</option>
+        <option value="'Courier New'">Courier New</option>
+        <option value="Impact">Impact</option>
+        <option value="'Comic Sans MS'">Comic Sans</option>
+      </select>
+      <input type="color" class="wm-text-ctrl" id="wm-text-color" value="#ffffff" style="display:none">
+      <label class="wm-tlbl wm-text-ctrl" style="display:none">Opacity <span id="wm-text-opacity-val">90%</span></label>
+      <input type="range" class="wm-text-ctrl" id="wm-text-opacity" min="0" max="1" step="0.01" value="0.9" style="display:none">
+      <label class="wm-tlbl wm-text-ctrl" style="display:none">Size <span id="wm-text-size-val">32px</span></label>
+      <input type="range" class="wm-text-ctrl" id="wm-text-size" min="8" max="300" step="1" value="32" style="display:none">
+      <label class="wm-tlbl wm-text-ctrl" style="display:none">Outline <span id="wm-text-outline-val">0px</span></label>
+      <input type="range" class="wm-text-ctrl" id="wm-text-outline" min="0" max="15" step="1" value="0" style="display:none">
+      <input type="color" class="wm-text-ctrl" id="wm-text-outline-color" value="#000000" style="display:none">
+      <span class="wm-sep"></span>
+
+      <label class="wm-tlbl"><input type="checkbox" id="wm-apply-all" checked> Apply to all</label>
+      <span class="wm-sep"></span>
+
+      <select class="wm-text-input" id="wm-export-format">
+        <option value="png">PNG</option>
+        <option value="jpg">JPG</option>
+      </select>
+      <label class="wm-tlbl" id="wm-quality-lbl" style="display:none">Quality <span id="wm-quality-val"></span></label>
+      <input type="range" id="wm-quality" min="10" max="100" step="1" value="92" style="display:none">
+      <span class="wm-sep"></span>
+
+      <button class="wm-tbtn" id="wm-copy" title="Copy current image">📋 Copy</button>
+      <button class="wm-tbtn wm-tbtn-primary" id="wm-export">⬇ Export Current</button>
+      <button class="wm-tbtn wm-tbtn-primary" id="wm-export-all">⬇ Export All <span id="wm-export-all-count"></span></button>
     </div>
 
     <div id="wm-body">
@@ -947,17 +985,20 @@
           <path d="M3 15l5-5 4 4 3-3 6 6"/>
           <circle cx="8.5" cy="8.5" r="1.5"/>
         </svg>
-        <p>Glisse une image ici</p>
+        <p>Glisse une ou plusieurs images ici</p>
         <p style="font-size:11px;color:var(--muted)">ou</p>
-        <button class="wm-tbtn" id="wm-load-base">Choisir un fichier</button>
-        <input type="file" id="wm-file-input" accept="image/*" style="display:none">
+        <button class="wm-tbtn" id="wm-load-base">Choisir des fichiers</button>
       </div>
 
       <div id="wm-canvas-area">
+        <div id="wm-image-list"></div>
         <div id="wm-canvas-wrap">
           <img id="wm-base-img" alt="Base image">
           <div id="wm-overlay-wrap">
             <img id="wm-overlay" alt="Watermark">
+          </div>
+          <div id="wm-text-overlay-wrap">
+            <div id="wm-text-overlay"></div>
           </div>
         </div>
       </div>
@@ -965,6 +1006,63 @@
     </div>
 
   </div><!-- /view-watermark -->
+
+  <!-- ── Comic view ──────────────────────────────────────────────────────── -->
+  <div id="view-comic">
+    <div id="comic-toolbar">
+      <select class="comic-sel" id="comic-canvas-preset">
+        <option value="">— Canvas —</option>
+        <option value="1080,1080">Instagram (1080×1080)</option>
+        <option value="1920,1080">HD (1920×1080)</option>
+        <option value="800,1200">Manga Page (800×1200)</option>
+        <option value="2480,3508">A4 Portrait (2480×3508)</option>
+      </select>
+      <input type="number" class="comic-num" id="comic-custom-w" placeholder="L" min="100" max="6000">
+      <input type="number" class="comic-num" id="comic-custom-h" placeholder="H" min="100" max="6000">
+      <button class="comic-tbtn" id="comic-custom-apply">Appliquer taille</button>
+      <span class="comic-sep"></span>
+      <select class="comic-sel" id="comic-layout-preset">
+        <option value="">— Disposition —</option>
+        <option value="solo">Solo</option>
+        <option value="split">Split (2)</option>
+        <option value="three-equal">3 Équivalents</option>
+        <option value="grid2x2">Grille 2×2</option>
+        <option value="manga-strip">Bande Manga</option>
+      </select>
+      <span class="comic-sep"></span>
+      <button class="comic-tbtn comic-tool-btn active" id="comic-tool-select" title="Select (S)">↖ Select</button>
+      <button class="comic-tbtn comic-tool-btn" id="comic-tool-draw" title="Draw (D)">✏ Draw</button>
+      <input type="color" id="comic-draw-color" value="#000000" style="display:none">
+      <input type="range" id="comic-draw-width" min="1" max="20" value="4" style="display:none">
+      <span class="comic-sep"></span>
+      <select class="comic-sel" id="comic-bubble-style">
+        <option value="speech">Speech</option>
+        <option value="think">Think</option>
+        <option value="shout">Shout</option>
+        <option value="caption">Caption</option>
+        <option value="cloud">Cloud</option>
+      </select>
+      <button class="comic-tbtn" id="comic-add-bubble">💬 Add Bubble</button>
+      <button class="comic-tbtn comic-tbtn-danger" id="comic-btn-delete" title="Delete (Del)">🗑 Delete</button>
+      <span class="comic-sep"></span>
+      <button class="comic-tbtn" id="comic-btn-undo" title="Undo (Ctrl+Z)">↺ Undo</button>
+      <button class="comic-tbtn" id="comic-btn-redo" title="Redo (Ctrl+Y)">↻ Redo</button>
+      <span class="comic-sep"></span>
+      <button class="comic-tbtn" id="comic-btn-new">🆕 New</button>
+      <button class="comic-tbtn" id="comic-btn-save">💾 Save</button>
+      <button class="comic-tbtn" id="comic-btn-load">📂 Load</button>
+      <input type="file" id="comic-file-project" accept=".json" style="display:none">
+      <span class="comic-sep"></span>
+      <button class="comic-tbtn" id="comic-btn-copy" title="Copy image">📋 Copy</button>
+      <button class="comic-tbtn comic-tbtn-primary" id="comic-btn-export">⬇ Export PNG</button>
+    </div>
+    <div id="comic-canvas-area">
+      <div id="comic-canvas-wrap">
+        <canvas id="comic-canvas" width="1080" height="1080"></canvas>
+      </div>
+    </div>
+    <input type="file" id="comic-file-image" accept="image/*" style="display:none">
+  </div><!-- /view-comic -->
 
   <!-- Preset picker modal -->
   <div class="sws-overlay" id="sws-preset-modal">
@@ -1359,6 +1457,7 @@
 <script src="src/inpaint.js"></script>
 <script src="src/scheduler.js"></script>
 <script src="src/watermark.js"></script>
+<script src="src/comic.js"></script>
 <script src="src/inpaintScheduler.js"></script>
 <script src="src/app.js"></script>
 </body>
