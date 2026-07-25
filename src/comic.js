@@ -840,12 +840,13 @@ const Comic = (() => {
     pushUndo();
     const background = q('comic-sfx-bg').value;
     const font = q('comic-bubble-font').value;
+    const text = q('comic-sfx-preset').value || 'BOOM!';
     const w = S.project.canvasWidth * 0.28, h = S.project.canvasHeight * 0.16;
     const sfx = {
       id: genId(), type: 'sfx',
       x: (S.project.canvasWidth - w) / 2, y: (S.project.canvasHeight - h) / 2,
       w, h, rotation: 0,
-      text: 'BOOM!', font, fontSize: Math.max(24, Math.min(w, h) * 0.4),
+      text, font, fontSize: Math.max(24, Math.min(w, h) * 0.4),
       textColor: '#ffffff', outlineColor: '#000000', outlineWidth: null,
       background, fillColor: '#ffeb3b',
     };
@@ -1120,6 +1121,14 @@ const Comic = (() => {
     q('comic-clear-strokes').addEventListener('click', clearAllStrokes);
     q('comic-add-bubble').addEventListener('click', addBubble);
     q('comic-add-sfx').addEventListener('click', addSfx);
+    q('comic-sfx-preset').addEventListener('change', function () {
+      const sel = S.selectedId && findObject(S.selectedId);
+      if (sel && sel.type === 'sfx' && this.value) {
+        pushUndo();
+        sel.text = this.value;
+        render();
+      }
+    });
     q('comic-bubble-font').addEventListener('change', function () {
       const sel = S.selectedId && findObject(S.selectedId);
       if (sel && sel.type === 'bubble') { sel.font = this.value; render(); }
