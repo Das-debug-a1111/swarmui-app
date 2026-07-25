@@ -157,7 +157,7 @@ const Comic = (() => {
     const mk = (x, y, w, h, rotation = 0) => ({
       id: genId(), type: 'panel', x, y, w, h, rotation,
       vertices: [{ fx: 0, fy: 0 }, { fx: 1, fy: 0 }, { fx: 1, fy: 1 }, { fx: 0, fy: 1 }],
-      imageDataUrl: null, fit: 'cover', imgOffsetX: 0, imgOffsetY: 0, imgZoom: 1,
+      imageDataUrl: null, fit: 'contain', imgOffsetX: 0, imgOffsetY: 0, imgZoom: 1,
       borderWidth: null, borderColor: null,
     });
     switch (id) {
