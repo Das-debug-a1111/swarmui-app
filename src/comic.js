@@ -9,8 +9,14 @@ const Comic = (() => {
   const CANVAS_PRESETS = [
     { w: 1080, h: 1080, label: 'Instagram (1080×1080)' },
     { w: 1920, h: 1080, label: 'HD (1920×1080)' },
+    { w: 1280, h: 720,  label: 'HD 720p (1280×720)' },
+    { w: 3840, h: 2160, label: '4K (3840×2160)' },
+    { w: 1080, h: 1920, label: 'Story/Reels (1080×1920)' },
     { w: 800,  h: 1200, label: 'Manga Page (800×1200)' },
     { w: 2480, h: 3508, label: 'A4 Portrait (2480×3508)' },
+    { w: 3508, h: 2480, label: 'A4 Paysage (3508×2480)' },
+    { w: 1600, h: 900,  label: 'Twitter Banner (1600×900)' },
+    { w: 1200, h: 630,  label: 'Facebook Post (1200×630)' },
   ];
 
   const CORNERS = [
@@ -54,8 +60,24 @@ const Comic = (() => {
       y: dx * Math.sin(rad) + dy * Math.cos(rad) + obj.h / 2,
     };
   }
+  // Ray-casting point-in-polygon — poly is an array of {x,y} in the same
+  // local space as the test point.
+  function pointInPolygon(poly, x, y) {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const xi = poly[i].x, yi = poly[i].y, xj = poly[j].x, yj = poly[j].y;
+      const intersect = ((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+      if (intersect) inside = !inside;
+    }
+    return inside;
+  }
+
   function hitTestObject(obj, px, py) {
     const lp = worldToLocal(obj, px, py);
+    if (obj.type === 'panel') {
+      const poly = panelVertexList(obj).map(v => ({ x: v.fx * obj.w, y: v.fy * obj.h }));
+      return pointInPolygon(poly, lp.x, lp.y);
+    }
     return lp.x >= 0 && lp.x <= obj.w && lp.y >= 0 && lp.y <= obj.h;
   }
   function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
@@ -132,27 +154,136 @@ const Comic = (() => {
   // ── Layout presets ────────────────────────────────────────────────────────
   function buildLayoutPanels(id, cw, ch) {
     const g = Math.round(Math.min(cw, ch) * 0.02);
-    const mk = (x, y, w, h) => ({ id: genId(), type: 'panel', x, y, w, h, rotation: 0, imageDataUrl: null, fit: 'contain' });
+    const mk = (x, y, w, h, rotation = 0) => ({
+      id: genId(), type: 'panel', x, y, w, h, rotation,
+      vertices: [{ fx: 0, fy: 0 }, { fx: 1, fy: 0 }, { fx: 1, fy: 1 }, { fx: 0, fy: 1 }],
+      imageDataUrl: null, fit: 'cover', imgOffsetX: 0, imgOffsetY: 0, imgZoom: 1,
+      borderWidth: null, borderColor: null,
+    });
     switch (id) {
+      // ── Solo / Full / Centered / Wide ──────────────────────────────────
       case 'solo':
         return [mk(g, g, cw - 2 * g, ch - 2 * g)];
+      case 'full':
+        return [mk(0, 0, cw, ch)];
+      case 'centered': {
+        const m = Math.min(cw, ch) * 0.1;
+        return [mk(m, m, cw - 2 * m, ch - 2 * m)];
+      }
+      case 'wide': {
+        const h = ch * 0.5;
+        return [mk(g, (ch - h) / 2, cw - 2 * g, h)];
+      }
+      // ── 2 panels ────────────────────────────────────────────────────────
       case 'split': {
         const w = (cw - 3 * g) / 2;
         return [mk(g, g, w, ch - 2 * g), mk(g * 2 + w, g, w, ch - 2 * g)];
       }
+      case 'wide-narrow': {
+        const wideW = (cw - 3 * g) * 0.65, narrowW = (cw - 3 * g) * 0.35;
+        return [mk(g, g, wideW, ch - 2 * g), mk(g * 2 + wideW, g, narrowW, ch - 2 * g)];
+      }
+      case 'stacked': {
+        const h = (ch - 3 * g) / 2;
+        return [mk(g, g, cw - 2 * g, h), mk(g, g * 2 + h, cw - 2 * g, h)];
+      }
+      // ── 3 panels ────────────────────────────────────────────────────────
       case 'three-equal': {
         const h = (ch - 4 * g) / 3;
         return [mk(g, g, cw - 2 * g, h), mk(g, g * 2 + h, cw - 2 * g, h), mk(g, g * 3 + 2 * h, cw - 2 * g, h)];
       }
+      case 'big-plus-2': {
+        const bigH = (ch - 3 * g) * 0.6, smallH = (ch - 3 * g) * 0.4, w = (cw - 3 * g) / 2;
+        return [
+          mk(g, g, cw - 2 * g, bigH),
+          mk(g, g * 2 + bigH, w, smallH),
+          mk(g * 2 + w, g * 2 + bigH, w, smallH),
+        ];
+      }
+      case 'two-plus-big': {
+        const smallH = (ch - 3 * g) * 0.4, bigH = (ch - 3 * g) * 0.6, w = (cw - 3 * g) / 2;
+        return [
+          mk(g, g, w, smallH),
+          mk(g * 2 + w, g, w, smallH),
+          mk(g, g * 2 + smallH, cw - 2 * g, bigH),
+        ];
+      }
+      // ── 4 panels ────────────────────────────────────────────────────────
       case 'grid2x2': {
         const w = (cw - 3 * g) / 2, h = (ch - 3 * g) / 2;
         return [mk(g, g, w, h), mk(g * 2 + w, g, w, h), mk(g, g * 2 + h, w, h), mk(g * 2 + w, g * 2 + h, w, h)];
       }
+      case 'big-plus-3': {
+        const bigW = (cw - 3 * g) * 0.55, smallW = (cw - 3 * g) * 0.45;
+        const smallH = (ch - 4 * g) / 3;
+        const arr = [mk(g, g, bigW, ch - 2 * g)];
+        for (let i = 0; i < 3; i++) arr.push(mk(g * 2 + bigW, g + i * (smallH + g), smallW, smallH));
+        return arr;
+      }
+      case 'four-strips': {
+        const n = 4, h = (ch - (n + 1) * g) / n;
+        const arr = [];
+        for (let i = 0; i < n; i++) arr.push(mk(g, g + i * (h + g), cw - 2 * g, h));
+        return arr;
+      }
+      // ── Manga / Webtoon ─────────────────────────────────────────────────
+      case 'manga': {
+        const topH = ch * 0.4, botH = ch - topH;
+        const leftW = cw * 0.4, rightW = cw - leftW;
+        return [
+          mk(0, 0, cw, topH),
+          mk(0, topH, leftW, botH),
+          mk(leftW, topH, rightW, botH),
+        ];
+      }
+      case 'webtoon':
       case 'manga-strip': {
         const n = 4, h = ch / n;
         const arr = [];
         for (let i = 0; i < n; i++) arr.push(mk(0, i * h, cw, h));
         return arr;
+      }
+      // ── 5+ panels ───────────────────────────────────────────────────────
+      case 'grid3x2': {
+        const w = (cw - 4 * g) / 3, h = (ch - 3 * g) / 2;
+        const arr = [];
+        for (let row = 0; row < 2; row++) for (let col = 0; col < 3; col++) {
+          arr.push(mk(g + col * (w + g), g + row * (h + g), w, h));
+        }
+        return arr;
+      }
+      case 'story': {
+        const bigW = cw * 0.6 - 1.5 * g, bigH = ch * 0.55 - 1.5 * g;
+        const rightW = cw - bigW - 3 * g;
+        const rightH = (bigH - g) / 2;
+        const botH = ch - bigH - 3 * g;
+        const botW = (cw - 3 * g) / 2;
+        return [
+          mk(g, g, bigW, bigH),
+          mk(g * 2 + bigW, g, rightW, rightH),
+          mk(g * 2 + bigW, g * 2 + rightH, rightW, rightH),
+          mk(g, g * 2 + bigH, botW, botH),
+          mk(g * 2 + botW, g * 2 + bigH, botW, botH),
+        ];
+      }
+      case 'dynamic': {
+        const leftW = cw * 0.35 - 1.5 * g, rightW = cw - leftW - 3 * g;
+        const h1 = (ch - 2 * g) * 0.3, h2 = (ch - 2 * g) * 0.4, h3 = (ch - 2 * g) * 0.3;
+        return [
+          mk(g, g, leftW, ch - 2 * g),
+          mk(g * 2 + leftW, g, rightW, h1),
+          mk(g * 2 + leftW, g * 2 + h1, rightW, h2),
+          mk(g * 2 + leftW, g * 3 + h1 + h2, rightW, h3),
+        ];
+      }
+      case 'action': {
+        const w = (cw - 4 * g) / 3;
+        const h = ch - 2 * g;
+        return [
+          mk(g, g, w, h, -3),
+          mk(g * 2 + w, g, w, h, 0),
+          mk(g * 3 + 2 * w, g, w, h, 3),
+        ];
       }
       default:
         return [];
@@ -212,21 +343,43 @@ const Comic = (() => {
     ctx.restore();
   }
 
+  function panelVertexList(obj) {
+    return (obj.vertices && obj.vertices.length >= 3)
+      ? obj.vertices
+      : [{ fx: 0, fy: 0 }, { fx: 1, fy: 0 }, { fx: 1, fy: 1 }, { fx: 0, fy: 1 }];
+  }
+
+  // Traces the panel's polygon in its own LOCAL (unrotated, 0..w/0..h) space —
+  // caller must already be inside the translate+rotate from withClipRotate.
+  function tracePanelPolygon(ctx, obj) {
+    const verts = panelVertexList(obj);
+    ctx.beginPath();
+    verts.forEach((v, i) => {
+      const x = v.fx * obj.w, y = v.fy * obj.h;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    });
+    ctx.closePath();
+  }
+
   function drawPanel(ctx, obj) {
     withClipRotate(ctx, obj, ctx => {
+      tracePanelPolygon(ctx, obj);
       ctx.fillStyle = '#dcdcdc';
-      ctx.fillRect(0, 0, obj.w, obj.h);
+      ctx.fill();
       if (obj.imageDataUrl && obj._img && obj._img.complete && obj._img.naturalWidth) {
         ctx.save();
-        ctx.beginPath();
-        ctx.rect(0, 0, obj.w, obj.h);
+        tracePanelPolygon(ctx, obj);
         ctx.clip();
         const img = obj._img;
-        const scale = obj.fit === 'cover'
-          ? Math.max(obj.w / img.naturalWidth, obj.h / img.naturalHeight)
-          : Math.min(obj.w / img.naturalWidth, obj.h / img.naturalHeight);
+        const zoom = obj.imgZoom || 1;
+        const baseScale = obj.fit === 'contain'
+          ? Math.min(obj.w / img.naturalWidth, obj.h / img.naturalHeight)
+          : Math.max(obj.w / img.naturalWidth, obj.h / img.naturalHeight);
+        const scale = baseScale * zoom;
         const dw = img.naturalWidth * scale, dh = img.naturalHeight * scale;
-        ctx.drawImage(img, (obj.w - dw) / 2, (obj.h - dh) / 2, dw, dh);
+        const dx = (obj.w - dw) / 2 + (obj.imgOffsetX || 0);
+        const dy = (obj.h - dh) / 2 + (obj.imgOffsetY || 0);
+        ctx.drawImage(img, dx, dy, dw, dh);
         ctx.restore();
       } else {
         ctx.fillStyle = '#888';
@@ -235,9 +388,10 @@ const Comic = (() => {
         ctx.textBaseline = 'middle';
         ctx.fillText('Double-clic pour charger une image', obj.w / 2, obj.h / 2, obj.w * 0.9);
       }
-      ctx.lineWidth = Math.max(2, Math.min(obj.w, obj.h) * 0.01);
-      ctx.strokeStyle = '#000';
-      ctx.strokeRect(0, 0, obj.w, obj.h);
+      tracePanelPolygon(ctx, obj);
+      ctx.lineWidth = obj.borderWidth != null ? obj.borderWidth : Math.max(2, Math.min(obj.w, obj.h) * 0.01);
+      ctx.strokeStyle = obj.borderColor || '#000';
+      ctx.stroke();
     });
   }
 
@@ -317,6 +471,65 @@ const Comic = (() => {
     ctx.closePath();
   }
 
+  function pathAngular(ctx, w, h) {
+    const tailW = w * 0.14, tailH = h * 0.22, tailX = w * 0.22;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(w, 0);
+    ctx.lineTo(w, h);
+    ctx.lineTo(tailX + tailW, h);
+    ctx.lineTo(tailX, h + tailH);
+    ctx.lineTo(tailX - tailW * 0.4, h);
+    ctx.lineTo(0, h);
+    ctx.closePath();
+  }
+
+  function pathBox(ctx, w, h) {
+    const tailW = w * 0.12, tailH = h * 0.18, tailX = w * 0.2;
+    ctx.beginPath();
+    ctx.moveTo(0, 0);
+    ctx.lineTo(w, 0);
+    ctx.lineTo(w, h);
+    ctx.lineTo(tailX + tailW, h);
+    ctx.lineTo(tailX, h + tailH);
+    ctx.lineTo(tailX - tailW * 0.4, h);
+    ctx.lineTo(0, h);
+    ctx.closePath();
+  }
+
+  function pathJagged(ctx, w, h) {
+    const cx = w / 2, cy = h / 2;
+    const points = 16;
+    ctx.beginPath();
+    for (let i = 0; i < points; i++) {
+      const angle = (Math.PI * 2 * i) / points;
+      const rad = 0.85 + Math.sin(i * 2.7) * 0.15;
+      const x = cx + Math.cos(angle) * (w / 2) * rad;
+      const y = cy + Math.sin(angle) * (h / 2) * rad;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+  }
+
+  function pathElectric(ctx, w, h) {
+    const r = Math.min(w, h) * 0.12;
+    const tailW = w * 0.13, tailH = h * 0.2, tailX = w * 0.24;
+    const points = 20;
+    ctx.beginPath();
+    for (let i = 0; i <= points; i++) {
+      const t = i / points;
+      const angle = t * Math.PI * 2;
+      const jitter = 1 + (i % 3 === 0 ? 0.12 : -0.06);
+      const x = w / 2 + Math.cos(angle) * (w / 2 - r) * jitter;
+      const y = h / 2 + Math.sin(angle) * (h / 2 - r) * jitter;
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.lineTo(tailX + tailW, h);
+    ctx.lineTo(tailX, h + tailH);
+    ctx.lineTo(tailX - tailW * 0.4, h);
+    ctx.closePath();
+  }
+
   function drawBubbleText(ctx, obj) {
     if (!obj.text) return;
     ctx.fillStyle = obj.textColor || '#000';
@@ -338,20 +551,42 @@ const Comic = (() => {
     lines.forEach((l, i) => ctx.fillText(l, obj.w / 2, startY + i * lh, maxWidth));
   }
 
+  function tracePathForStyle(ctx, style, w, h) {
+    if (style === 'speech')       pathSpeech(ctx, w, h);
+    else if (style === 'shout')   pathShout(ctx, w, h);
+    else if (style === 'cloud')   pathCloud(ctx, w, h);
+    else if (style === 'caption') pathCaption(ctx, w, h);
+    else if (style === 'angular') pathAngular(ctx, w, h);
+    else if (style === 'box')     pathBox(ctx, w, h);
+    else if (style === 'jagged')  pathJagged(ctx, w, h);
+    else if (style === 'electric') pathElectric(ctx, w, h);
+    else if (style === 'double')  pathSpeech(ctx, w, h);
+    else if (style === 'no-tail') roundRectPath(ctx, 0, 0, w, h, Math.min(w, h) * 0.2);
+    else if (style === 'whisper') roundRectPath(ctx, 0, 0, w, h, Math.min(w, h) * 0.35);
+    else /* think */              roundRectPath(ctx, 0, 0, w, h, Math.min(w, h) * 0.35);
+  }
+
   function drawBubble(ctx, obj) {
     withClipRotate(ctx, obj, ctx => {
       const style = obj.style || 'speech';
-      if (style === 'speech')      pathSpeech(ctx, obj.w, obj.h);
-      else if (style === 'shout')  pathShout(ctx, obj.w, obj.h);
-      else if (style === 'cloud')  pathCloud(ctx, obj.w, obj.h);
-      else if (style === 'caption') pathCaption(ctx, obj.w, obj.h);
-      else /* think */             roundRectPath(ctx, 0, 0, obj.w, obj.h, Math.min(obj.w, obj.h) * 0.35);
+      tracePathForStyle(ctx, style, obj.w, obj.h);
 
       ctx.fillStyle = obj.fillColor || '#ffffff';
       ctx.fill();
       ctx.lineWidth = Math.max(2, Math.min(obj.w, obj.h) * 0.015);
       ctx.strokeStyle = obj.borderColor || '#000000';
+      if (style === 'whisper') ctx.setLineDash([ctx.lineWidth * 1.5, ctx.lineWidth * 1.5]);
       ctx.stroke();
+      ctx.setLineDash([]);
+
+      if (style === 'double') {
+        const inset = Math.max(3, Math.min(obj.w, obj.h) * 0.05);
+        ctx.save();
+        ctx.translate(inset, inset);
+        pathSpeech(ctx, obj.w - inset * 2, obj.h - inset * 2);
+        ctx.stroke();
+        ctx.restore();
+      }
 
       if (style === 'think') {
         let bx = obj.w * 0.18, by = obj.h + 6, r = Math.min(obj.w, obj.h) * 0.05;
@@ -382,6 +617,18 @@ const Comic = (() => {
     ctx.restore();
 
     const r = handleRadius();
+
+    if (S.tool === 'vertex' && obj.type === 'panel') {
+      ctx.fillStyle = '#ffb020';
+      panelVertexList(obj).forEach(v => {
+        const w = localToWorld(obj, v.fx * obj.w, v.fy * obj.h);
+        ctx.beginPath();
+        ctx.arc(w.x, w.y, r / 2, 0, Math.PI * 2);
+        ctx.fill();
+      });
+      return;
+    }
+
     ctx.fillStyle = '#4a9eff';
     for (const c of CORNERS) {
       const w = localToWorld(obj, c.fx * obj.w, c.fy * obj.h);
@@ -397,12 +644,24 @@ const Comic = (() => {
     const canvas = q('comic-canvas');
     canvas.width = S.project.canvasWidth;
     canvas.height = S.project.canvasHeight;
-    const area = q('comic-canvas-area');
-    const maxW = Math.max(100, area.clientWidth - 40);
-    const maxH = Math.max(100, area.clientHeight - 40);
-    const scale = Math.min(maxW / canvas.width, maxH / canvas.height, 1);
+    let scale;
+    if (S.viewZoom) {
+      scale = S.viewZoom;
+    } else {
+      const area = q('comic-canvas-area');
+      const maxW = Math.max(100, area.clientWidth - 40);
+      const maxH = Math.max(100, area.clientHeight - 40);
+      scale = Math.min(maxW / canvas.width, maxH / canvas.height, 1);
+    }
     canvas.style.width  = (canvas.width * scale) + 'px';
     canvas.style.height = (canvas.height * scale) + 'px';
+    const label = q('comic-zoom-val');
+    if (label) label.textContent = Math.round(scale * 100) + '%';
+  }
+
+  function setViewZoom(zoom) {
+    S.viewZoom = zoom;
+    resizeCanvasElement();
   }
 
   // ── Export / copy ─────────────────────────────────────────────────────────
@@ -542,8 +801,12 @@ const Comic = (() => {
     S.tool = tool;
     q('comic-tool-select').classList.toggle('active', tool === 'select');
     q('comic-tool-draw').classList.toggle('active', tool === 'draw');
+    q('comic-tool-vertex').classList.toggle('active', tool === 'vertex');
+    q('comic-tool-eraser').classList.toggle('active', tool === 'eraser');
     q('comic-draw-color').style.display = tool === 'draw' ? '' : 'none';
     q('comic-draw-width').style.display = tool === 'draw' ? '' : 'none';
+    q('comic-add-vertex').style.display = tool === 'vertex' ? '' : 'none';
+    render();
   }
 
   function isViewActive() {
@@ -557,8 +820,9 @@ const Comic = (() => {
     if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelected(); return; }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return; }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
-    if (e.key.toLowerCase() === 's') { setTool('select'); return; }
+    if (e.key.toLowerCase() === 's' || e.key.toLowerCase() === 'v') { setTool('select'); return; }
     if (e.key.toLowerCase() === 'd') { setTool('draw'); return; }
+    if (e.key.toLowerCase() === 'e') { setTool('eraser'); return; }
   });
 
   // ── Mouse interaction ─────────────────────────────────────────────────────
@@ -577,7 +841,29 @@ const Comic = (() => {
         return;
       }
 
-      if (S.selectedId) {
+      if (S.tool === 'eraser') {
+        pushUndo();
+        dragState = { mode: 'erase' };
+        eraseStrokesNear(pos);
+        return;
+      }
+
+      if (S.tool === 'vertex' && S.selectedId) {
+        const sel = findObject(S.selectedId);
+        if (sel && sel.type === 'panel') {
+          const r = handleRadius() * 1.6;
+          const verts = panelVertexList(sel);
+          for (let i = 0; i < verts.length; i++) {
+            const w = localToWorld(sel, verts[i].fx * sel.w, verts[i].fy * sel.h);
+            if (dist(pos, w) <= r) {
+              pushUndo();
+              S._lastVertexHit = { objId: sel.id, index: i };
+              dragState = { mode: 'vertex', id: sel.id, vertexIndex: i };
+              return;
+            }
+          }
+        }
+      } else if (S.selectedId) {
         const sel = findObject(S.selectedId);
         if (sel) {
           const handle = hitTestHandle(sel, pos);
@@ -605,7 +891,9 @@ const Comic = (() => {
       if (hit) {
         S.selectedId = hit.id;
         pushUndo();
-        dragState = { mode: 'move', id: hit.id, last: pos };
+        dragState = (e.ctrlKey && hit.type === 'panel')
+          ? { mode: 'imgmove', id: hit.id, last: pos }
+          : { mode: 'move', id: hit.id, last: pos };
       } else {
         S.selectedId = null;
       }
@@ -645,6 +933,20 @@ const Comic = (() => {
         const centerX = dragState.anchorWorld.x - (relX * Math.cos(rad2) - relY * Math.sin(rad2));
         const centerY = dragState.anchorWorld.y - (relX * Math.sin(rad2) + relY * Math.cos(rad2));
         obj.w = w; obj.h = h; obj.x = centerX - w / 2; obj.y = centerY - h / 2;
+      } else if (dragState.mode === 'vertex') {
+        const lp = worldToLocal(obj, pos.x, pos.y);
+        const verts = panelVertexList(obj);
+        verts[dragState.vertexIndex] = {
+          fx: Math.min(1.5, Math.max(-0.5, lp.x / obj.w)),
+          fy: Math.min(1.5, Math.max(-0.5, lp.y / obj.h)),
+        };
+        obj.vertices = verts;
+      } else if (dragState.mode === 'imgmove') {
+        obj.imgOffsetX = (obj.imgOffsetX || 0) + (pos.x - dragState.last.x);
+        obj.imgOffsetY = (obj.imgOffsetY || 0) + (pos.y - dragState.last.y);
+        dragState.last = pos;
+      } else if (dragState.mode === 'erase') {
+        eraseStrokesNear(pos);
       }
       render();
     });
@@ -677,6 +979,52 @@ const Comic = (() => {
       r.onload = ev => { pushUndo(); panel.imageDataUrl = ev.target.result; delete panel._img; preloadImages(); };
       r.readAsDataURL(file);
     });
+
+    canvas.addEventListener('wheel', e => {
+      const pos = getCanvasPos(e);
+      const panel = [...S.project.objects].reverse().find(o => o.type === 'panel' && hitTestObject(o, pos.x, pos.y));
+      if (!panel) return;
+      e.preventDefault();
+      const delta = e.deltaY < 0 ? 0.05 : -0.05;
+      panel.imgZoom = Math.max(0.2, Math.min(5, (panel.imgZoom || 1) + delta));
+      render();
+    }, { passive: false });
+  }
+
+  // ── Eraser ────────────────────────────────────────────────────────────────
+  function eraseStrokesNear(pos) {
+    const r = handleRadius() * 2;
+    const before = S.project.objects.length;
+    S.project.objects = S.project.objects.filter(o => {
+      if (o.type !== 'stroke') return true;
+      return !o.points.some(p => dist(p, pos) <= r);
+    });
+    if (S.project.objects.length !== before) render();
+  }
+
+  function clearAllStrokes() {
+    pushUndo();
+    S.project.objects = S.project.objects.filter(o => o.type !== 'stroke');
+    render();
+  }
+
+  // ── Vertex tool ───────────────────────────────────────────────────────────
+  function addVertexToSelected() {
+    const sel = S.selectedId && findObject(S.selectedId);
+    if (!sel || sel.type !== 'panel') { toast('Sélectionne un panel'); return; }
+    pushUndo();
+    const verts = panelVertexList(sel);
+    // Insert a midpoint on the longest edge (in local px) — simple, always valid.
+    let bestI = 0, bestLen = -1;
+    for (let i = 0; i < verts.length; i++) {
+      const a = verts[i], b = verts[(i + 1) % verts.length];
+      const len = Math.hypot((b.fx - a.fx) * sel.w, (b.fy - a.fy) * sel.h);
+      if (len > bestLen) { bestLen = len; bestI = i; }
+    }
+    const a = verts[bestI], b = verts[(bestI + 1) % verts.length];
+    const mid = { fx: (a.fx + b.fx) / 2, fy: (a.fy + b.fy) / 2 };
+    sel.vertices = [...verts.slice(0, bestI + 1), mid, ...verts.slice(bestI + 1)];
+    render();
   }
 
   // ── Send an image in from the gallery ────────────────────────────────────
@@ -707,7 +1055,23 @@ const Comic = (() => {
     q('comic-layout-preset').addEventListener('change', e => { applyLayout(e.target.value); e.target.value = ''; });
     q('comic-tool-select').addEventListener('click', () => setTool('select'));
     q('comic-tool-draw').addEventListener('click',   () => setTool('draw'));
+    q('comic-tool-vertex').addEventListener('click', () => setTool('vertex'));
+    q('comic-tool-eraser').addEventListener('click', () => setTool('eraser'));
+    q('comic-add-vertex').addEventListener('click', addVertexToSelected);
+    q('comic-clear-strokes').addEventListener('click', clearAllStrokes);
     q('comic-add-bubble').addEventListener('click', addBubble);
+    q('comic-border-width').addEventListener('input', function () {
+      q('comic-border-width-val').textContent = this.value + 'px';
+      const sel = S.selectedId && findObject(S.selectedId);
+      if (sel && sel.type === 'panel') { sel.borderWidth = +this.value; render(); }
+    });
+    q('comic-border-color').addEventListener('input', function () {
+      const sel = S.selectedId && findObject(S.selectedId);
+      if (sel && sel.type === 'panel') { sel.borderColor = this.value; render(); }
+    });
+    q('comic-zoom-in').addEventListener('click', () => setViewZoom((S.viewZoom || 1) + 0.1));
+    q('comic-zoom-out').addEventListener('click', () => setViewZoom(Math.max(0.1, (S.viewZoom || 1) - 0.1)));
+    q('comic-zoom-fit').addEventListener('click', () => setViewZoom(null));
     q('comic-btn-delete').addEventListener('click', deleteSelected);
     q('comic-btn-undo').addEventListener('click', undo);
     q('comic-btn-redo').addEventListener('click', redo);

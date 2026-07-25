@@ -1,6 +1,6 @@
 {
   "name": "swarm-app",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "A native Electron frontend for SwarmUI — Txt2Img, Inpaint, Scheduler, Character Selector",
   "author": "das",
   "license": "MIT",

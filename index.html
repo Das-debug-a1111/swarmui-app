@@ -1014,8 +1014,14 @@
         <option value="">— Canvas —</option>
         <option value="1080,1080">Instagram (1080×1080)</option>
         <option value="1920,1080">HD (1920×1080)</option>
+        <option value="1280,720">HD 720p (1280×720)</option>
+        <option value="3840,2160">4K (3840×2160)</option>
+        <option value="1080,1920">Story/Reels (1080×1920)</option>
         <option value="800,1200">Manga Page (800×1200)</option>
         <option value="2480,3508">A4 Portrait (2480×3508)</option>
+        <option value="3508,2480">A4 Paysage (3508×2480)</option>
+        <option value="1600,900">Twitter Banner (1600×900)</option>
+        <option value="1200,630">Facebook Post (1200×630)</option>
       </select>
       <input type="number" class="comic-num" id="comic-custom-w" placeholder="L" min="100" max="6000">
       <input type="number" class="comic-num" id="comic-custom-h" placeholder="H" min="100" max="6000">
@@ -1023,30 +1029,76 @@
       <span class="comic-sep"></span>
       <select class="comic-sel" id="comic-layout-preset">
         <option value="">— Disposition —</option>
-        <option value="solo">Solo</option>
-        <option value="split">Split (2)</option>
-        <option value="three-equal">3 Équivalents</option>
-        <option value="grid2x2">Grille 2×2</option>
-        <option value="manga-strip">Bande Manga</option>
+        <optgroup label="Solo / Full / Centered / Wide">
+          <option value="solo">Solo</option>
+          <option value="full">Full</option>
+          <option value="centered">Centered</option>
+          <option value="wide">Wide</option>
+        </optgroup>
+        <optgroup label="2 panels">
+          <option value="split">Split</option>
+          <option value="wide-narrow">Wide+Narrow</option>
+          <option value="stacked">Stacked</option>
+        </optgroup>
+        <optgroup label="3 panels">
+          <option value="three-equal">3 Equal</option>
+          <option value="big-plus-2">Big+2</option>
+          <option value="two-plus-big">2+Big</option>
+        </optgroup>
+        <optgroup label="4 panels">
+          <option value="grid2x2">2×2 Grid</option>
+          <option value="big-plus-3">Big+3</option>
+          <option value="four-strips">4 Strips</option>
+        </optgroup>
+        <optgroup label="Manga / Webtoon">
+          <option value="manga">Manga</option>
+          <option value="webtoon">Webtoon</option>
+        </optgroup>
+        <optgroup label="5+ panels">
+          <option value="grid3x2">3×2</option>
+          <option value="story">Story</option>
+          <option value="dynamic">Dynamic</option>
+          <option value="action">Action</option>
+        </optgroup>
       </select>
       <span class="comic-sep"></span>
-      <button class="comic-tbtn comic-tool-btn active" id="comic-tool-select" title="Select (S)">↖ Select</button>
+      <button class="comic-tbtn comic-tool-btn active" id="comic-tool-select" title="Select (S/V)">↖ Select</button>
+      <button class="comic-tbtn comic-tool-btn" id="comic-tool-vertex" title="Vertex — reshape panel">⬡ Vertex</button>
+      <button class="comic-tbtn" id="comic-add-vertex" style="display:none">＋ Add Vertex</button>
       <button class="comic-tbtn comic-tool-btn" id="comic-tool-draw" title="Draw (D)">✏ Draw</button>
       <input type="color" id="comic-draw-color" value="#000000" style="display:none">
       <input type="range" id="comic-draw-width" min="1" max="20" value="4" style="display:none">
+      <button class="comic-tbtn comic-tool-btn" id="comic-tool-eraser" title="Eraser (E) — erase strokes">⬜ Eraser</button>
+      <button class="comic-tbtn" id="comic-clear-strokes" title="Clear all draw strokes">🗑 Clear Strokes</button>
       <span class="comic-sep"></span>
       <select class="comic-sel" id="comic-bubble-style">
         <option value="speech">Speech</option>
         <option value="think">Think</option>
         <option value="shout">Shout</option>
-        <option value="caption">Caption</option>
         <option value="cloud">Cloud</option>
+        <option value="angular">Angular</option>
+        <option value="whisper">Whisper</option>
+        <option value="caption">Caption</option>
+        <option value="electric">Electric</option>
+        <option value="no-tail">No Tail</option>
+        <option value="box">Box</option>
+        <option value="double">Double</option>
+        <option value="jagged">Jagged</option>
       </select>
       <button class="comic-tbtn" id="comic-add-bubble">💬 Add Bubble</button>
       <button class="comic-tbtn comic-tbtn-danger" id="comic-btn-delete" title="Delete (Del)">🗑 Delete</button>
       <span class="comic-sep"></span>
+      <label class="wm-tlbl">Border <span id="comic-border-width-val"></span></label>
+      <input type="range" id="comic-border-width" min="0" max="20" step="1" value="4">
+      <input type="color" id="comic-border-color" value="#000000">
+      <span class="comic-sep"></span>
       <button class="comic-tbtn" id="comic-btn-undo" title="Undo (Ctrl+Z)">↺ Undo</button>
       <button class="comic-tbtn" id="comic-btn-redo" title="Redo (Ctrl+Y)">↻ Redo</button>
+      <span class="comic-sep"></span>
+      <button class="comic-tbtn" id="comic-zoom-out" title="Zoom out">−</button>
+      <span class="wm-tlbl" id="comic-zoom-val">100%</span>
+      <button class="comic-tbtn" id="comic-zoom-in" title="Zoom in">＋</button>
+      <button class="comic-tbtn" id="comic-zoom-fit" title="Fit to view">⇲ Fit</button>
       <span class="comic-sep"></span>
       <button class="comic-tbtn" id="comic-btn-new">🆕 New</button>
       <button class="comic-tbtn" id="comic-btn-save">💾 Save</button>
