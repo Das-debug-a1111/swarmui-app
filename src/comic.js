@@ -783,17 +783,26 @@ const Comic = (() => {
   function addBubble() {
     pushUndo();
     const style = q('comic-bubble-style').value;
+    const font = q('comic-bubble-font').value;
+    const textColor = q('comic-text-color').value;
     const w = S.project.canvasWidth * 0.3, h = S.project.canvasHeight * 0.15;
     const bubble = {
       id: genId(), type: 'bubble',
       x: (S.project.canvasWidth - w) / 2, y: (S.project.canvasHeight - h) / 2,
       w, h, rotation: 0, style,
-      text: 'Texte…', font: 'Arial', fontSize: Math.max(16, Math.min(w, h) * 0.18),
-      textColor: '#000000', fillColor: '#ffffff', borderColor: '#000000',
+      text: 'Texte…', font, fontSize: Math.max(16, Math.min(w, h) * 0.18),
+      textColor, fillColor: '#ffffff', borderColor: '#000000',
     };
     S.project.objects.push(bubble);
     S.selectedId = bubble.id;
     render();
+  }
+
+  function syncBubbleControls(obj) {
+    if (!obj || obj.type !== 'bubble') return;
+    q('comic-bubble-font').value = obj.font || 'Arial';
+    q('comic-text-color').value = obj.textColor || '#000000';
+    q('comic-bubble-style').value = obj.style || 'speech';
   }
 
   // ── Tool / keyboard ───────────────────────────────────────────────────────
@@ -890,6 +899,7 @@ const Comic = (() => {
       }
       if (hit) {
         S.selectedId = hit.id;
+        syncBubbleControls(hit);
         pushUndo();
         dragState = (e.ctrlKey && hit.type === 'panel')
           ? { mode: 'imgmove', id: hit.id, last: pos }
@@ -1060,6 +1070,14 @@ const Comic = (() => {
     q('comic-add-vertex').addEventListener('click', addVertexToSelected);
     q('comic-clear-strokes').addEventListener('click', clearAllStrokes);
     q('comic-add-bubble').addEventListener('click', addBubble);
+    q('comic-bubble-font').addEventListener('change', function () {
+      const sel = S.selectedId && findObject(S.selectedId);
+      if (sel && sel.type === 'bubble') { sel.font = this.value; render(); }
+    });
+    q('comic-text-color').addEventListener('input', function () {
+      const sel = S.selectedId && findObject(S.selectedId);
+      if (sel && sel.type === 'bubble') { sel.textColor = this.value; render(); }
+    });
     q('comic-border-width').addEventListener('input', function () {
       q('comic-border-width-val').textContent = this.value + 'px';
       const sel = S.selectedId && findObject(S.selectedId);
@@ -1098,12 +1116,34 @@ const Comic = (() => {
     bindCanvasEvents();
   }
 
+  async function loadSystemFonts() {
+    const sel = q('comic-bubble-font');
+    if (!sel || !('queryLocalFonts' in window)) return; // keep the built-in fallback list
+    try {
+      const fonts = await window.queryLocalFonts();
+      const families = [...new Set(fonts.map(f => f.family))].sort((a, b) => a.localeCompare(b));
+      if (!families.length) return;
+      const current = sel.value;
+      sel.innerHTML = '';
+      families.forEach(f => {
+        const opt = document.createElement('option');
+        opt.value = f;
+        opt.textContent = f;
+        sel.appendChild(opt);
+      });
+      if (families.includes(current)) sel.value = current;
+    } catch (e) {
+      console.warn('[Comic] queryLocalFonts unavailable:', e.message);
+    }
+  }
+
   function init() {
     if (S.initialized) return;
     S.initialized = true;
     bindUI();
     resizeCanvasElement();
     render();
+    loadSystemFonts();
   }
 
   function onShow() {

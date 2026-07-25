@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, dialog, net } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, net, session } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path    = require('path');
 const fs      = require('fs').promises;
@@ -273,6 +273,10 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  // Needed for the Comic tab's font picker (queryLocalFonts) to list system fonts.
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
+    callback(permission === 'local-fonts');
+  });
   createWindow();
   if (app.isPackaged) autoUpdater.checkForUpdates().catch(() => {});
 });
