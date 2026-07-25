@@ -324,6 +324,7 @@ const Comic = (() => {
     for (const obj of S.project.objects) {
       if (obj.type === 'panel')  drawPanel(ctx, obj);
       else if (obj.type === 'bubble') drawBubble(ctx, obj);
+      else if (obj.type === 'sfx') drawSfx(ctx, obj);
       else if (obj.type === 'stroke') drawStroke(ctx, obj);
     }
 
@@ -604,6 +605,31 @@ const Comic = (() => {
     });
   }
 
+  // ── SFX (sound effect: BOOM/POW-style stylized text) ───────────────────────
+  function drawSfx(ctx, obj) {
+    withClipRotate(ctx, obj, ctx => {
+      if (obj.background && obj.background !== 'none') {
+        tracePathForStyle(ctx, obj.background, obj.w, obj.h);
+        ctx.fillStyle = obj.fillColor || '#ffeb3b';
+        ctx.fill();
+      }
+
+      const fontSize = obj.fontSize || 48;
+      ctx.font = `bold ${fontSize}px ${obj.font || 'Impact'}`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.lineJoin = 'round';
+      const outline = obj.outlineWidth != null ? obj.outlineWidth : Math.max(2, fontSize * 0.12);
+      if (outline > 0) {
+        ctx.lineWidth = outline;
+        ctx.strokeStyle = obj.outlineColor || '#000000';
+        ctx.strokeText(obj.text || '', obj.w / 2, obj.h / 2, obj.w * 0.95);
+      }
+      ctx.fillStyle = obj.textColor || '#ffffff';
+      ctx.fillText(obj.text || '', obj.w / 2, obj.h / 2, obj.w * 0.95);
+    });
+  }
+
   function drawSelectionHandles(ctx, obj) {
     ctx.save();
     const cx = obj.x + obj.w / 2, cy = obj.y + obj.h / 2;
@@ -799,10 +825,33 @@ const Comic = (() => {
   }
 
   function syncBubbleControls(obj) {
-    if (!obj || obj.type !== 'bubble') return;
-    q('comic-bubble-font').value = obj.font || 'Arial';
-    q('comic-text-color').value = obj.textColor || '#000000';
-    q('comic-bubble-style').value = obj.style || 'speech';
+    if (!obj) return;
+    if (obj.type === 'bubble') {
+      q('comic-bubble-font').value = obj.font || 'Arial';
+      q('comic-text-color').value = obj.textColor || '#000000';
+      q('comic-bubble-style').value = obj.style || 'speech';
+    } else if (obj.type === 'sfx') {
+      q('comic-bubble-font').value = obj.font || 'Impact';
+      q('comic-text-color').value = obj.textColor || '#ffffff';
+    }
+  }
+
+  function addSfx() {
+    pushUndo();
+    const background = q('comic-sfx-bg').value;
+    const font = q('comic-bubble-font').value;
+    const w = S.project.canvasWidth * 0.28, h = S.project.canvasHeight * 0.16;
+    const sfx = {
+      id: genId(), type: 'sfx',
+      x: (S.project.canvasWidth - w) / 2, y: (S.project.canvasHeight - h) / 2,
+      w, h, rotation: 0,
+      text: 'BOOM!', font, fontSize: Math.max(24, Math.min(w, h) * 0.4),
+      textColor: '#ffffff', outlineColor: '#000000', outlineWidth: null,
+      background, fillColor: '#ffeb3b',
+    };
+    S.project.objects.push(sfx);
+    S.selectedId = sfx.id;
+    render();
   }
 
   // ── Tool / keyboard ───────────────────────────────────────────────────────
@@ -971,7 +1020,7 @@ const Comic = (() => {
         if (o.type === 'stroke') continue;
         if (hitTestObject(o, pos.x, pos.y)) {
           if (o.type === 'panel') { S._pendingImagePanelId = o.id; q('comic-file-image').click(); }
-          else if (o.type === 'bubble') { openBubbleEditor(o); }
+          else if (o.type === 'bubble' || o.type === 'sfx') { openBubbleEditor(o); }
           break;
         }
       }
@@ -1070,6 +1119,7 @@ const Comic = (() => {
     q('comic-add-vertex').addEventListener('click', addVertexToSelected);
     q('comic-clear-strokes').addEventListener('click', clearAllStrokes);
     q('comic-add-bubble').addEventListener('click', addBubble);
+    q('comic-add-sfx').addEventListener('click', addSfx);
     q('comic-bubble-font').addEventListener('change', function () {
       const sel = S.selectedId && findObject(S.selectedId);
       if (sel && sel.type === 'bubble') { sel.font = this.value; render(); }
