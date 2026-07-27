@@ -272,6 +272,24 @@ function createWindow() {
   });
 }
 
+// ── IPC: auto-update ──────────────────────────────────────────────────────────
+autoUpdater.autoDownload = true;
+autoUpdater.autoInstallOnAppQuit = true;
+
+ipcMain.handle('app:installUpdate', () => {
+  autoUpdater.quitAndInstall();
+});
+
+function sendToWindow(channel, ...args) {
+  const win = BrowserWindow.getAllWindows()[0];
+  if (win) win.webContents.send(channel, ...args);
+}
+
+autoUpdater.on('update-available',   (info)     => sendToWindow('update-available', info.version));
+autoUpdater.on('download-progress',  (progress) => sendToWindow('update-download-progress', Math.round(progress.percent)));
+autoUpdater.on('update-downloaded',  (info)     => sendToWindow('update-downloaded', info.version));
+autoUpdater.on('error',              (err)      => sendToWindow('update-error', err.message));
+
 app.whenReady().then(() => {
   // Needed for the Comic tab's font picker (queryLocalFonts) to list system fonts.
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
@@ -281,9 +299,5 @@ app.whenReady().then(() => {
   if (app.isPackaged) autoUpdater.checkForUpdates().catch(() => {});
 });
 
-autoUpdater.on('update-available', (info) => {
-  const win = BrowserWindow.getAllWindows()[0];
-  if (win) win.webContents.send('update-available', info.version);
-});
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

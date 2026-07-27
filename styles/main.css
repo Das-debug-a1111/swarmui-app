@@ -52,6 +52,11 @@ textarea { user-select: text; }
   display: flex; align-items: center; gap: 8px;
 }
 #update-banner a { color: #9fffaf; font-weight: 600; }
+#update-install-btn {
+  background: #3fae4a; color: #fff; border: none; border-radius: 4px;
+  padding: 3px 10px; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+#update-install-btn:hover { background: #4dc35a; }
 #update-close { margin-left: auto; background: none; border: none; color: #9fffaf; cursor: pointer; font-size: 14px; }
 
 /* ── Top bar ──────────────────────────────────────────────────────────────── */

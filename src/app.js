@@ -1772,14 +1772,41 @@ window.addEventListener('DOMContentLoaded', () => {
   // Auto-connect
   connect();
 
-  // Update notifications
+  // Update notifications — auto-download in the background, prompt to
+  // restart+install once ready; falls back to a manual download link if the
+  // auto-update pipeline errors out (e.g. dev build, network issue).
   if (window.electronAPI?.onUpdateAvailable) {
+    const banner      = document.getElementById('update-banner');
+    const msg         = document.getElementById('update-msg');
+    const installBtn  = document.getElementById('update-install-btn');
+    const link        = document.getElementById('update-link');
+
+    const showBanner = () => banner.style.display = 'flex';
+    document.getElementById('update-close').onclick = () => banner.style.display = 'none';
+
     window.electronAPI.onUpdateAvailable((version) => {
-      const banner = document.getElementById('update-banner');
-      document.getElementById('update-msg').textContent = `Nouvelle version v${version} disponible — `;
-      banner.style.display = 'flex';
-      document.getElementById('update-close').onclick = () => banner.style.display = 'none';
+      msg.textContent = `Téléchargement de la mise à jour v${version}…`;
+      installBtn.style.display = 'none';
+      link.style.display = 'none';
+      showBanner();
     });
+    window.electronAPI.onUpdateProgress?.((pct) => {
+      msg.textContent = `Téléchargement de la mise à jour… ${pct}%`;
+      showBanner();
+    });
+    window.electronAPI.onUpdateDownloaded?.((version) => {
+      msg.textContent = `Mise à jour v${version} prête —`;
+      installBtn.style.display = '';
+      link.style.display = 'none';
+      showBanner();
+    });
+    window.electronAPI.onUpdateError?.(() => {
+      msg.textContent = `Mise à jour disponible —`;
+      installBtn.style.display = 'none';
+      link.style.display = '';
+      showBanner();
+    });
+    installBtn.onclick = () => window.electronAPI.installUpdate();
   }
 });
 

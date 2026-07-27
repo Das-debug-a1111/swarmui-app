@@ -422,23 +422,87 @@ const Comic = (() => {
     ctx.closePath();
   }
 
-  function pathSpeech(ctx, w, h) {
-    const r = Math.min(w, h) * 0.15;
-    const tailW = w * 0.14, tailH = h * 0.22, tailX = w * 0.22;
+  // Tail direction/position is stored as a point (obj.tailFx, obj.tailFy) — a
+  // fraction of the bubble's w/h, usually outside the [0,1] range so it sits
+  // past the body's edge. Default (0.22, 1.22) reproduces the original
+  // fixed bottom-left tail. hasTail() lists the styles whose path function
+  // draws this movable tail (others keep a fixed/no tail).
+  function hasTail(style) {
+    return style === 'speech' || style === 'angular' || style === 'box' || style === 'double';
+  }
+
+  // Finds where the ray from the rect center through the tail tip exits the
+  // w×h rectangle — that exit point is where the tail attaches to the body.
+  function computeTailBase(w, h, tailFx, tailFy) {
+    const tipX = tailFx * w, tipY = tailFy * h;
+    const cx = w / 2, cy = h / 2;
+    const dx = tipX - cx, dy = tipY - cy;
+    if (dx === 0 && dy === 0) return null;
+    let tMin = Infinity, edge = null;
+    if (dx !== 0) {
+      let t = (0 - cx) / dx;
+      if (t > 0) { const y = cy + t * dy; if (y >= 0 && y <= h && t < tMin) { tMin = t; edge = 'left'; } }
+      t = (w - cx) / dx;
+      if (t > 0) { const y = cy + t * dy; if (y >= 0 && y <= h && t < tMin) { tMin = t; edge = 'right'; } }
+    }
+    if (dy !== 0) {
+      let t = (0 - cy) / dy;
+      if (t > 0) { const x = cx + t * dx; if (x >= 0 && x <= w && t < tMin) { tMin = t; edge = 'top'; } }
+      t = (h - cy) / dy;
+      if (t > 0) { const x = cx + t * dx; if (x >= 0 && x <= w && t < tMin) { tMin = t; edge = 'bottom'; } }
+    }
+    if (!edge || tMin > 1) return null; // tip is inside the body — no tail to draw
+    return { edge, bx: cx + tMin * dx, by: cy + tMin * dy, tipX, tipY };
+  }
+
+  // Two points straddling the base point along the exit edge, ordered to
+  // match the edge's traversal direction in traceRoundedWithTail().
+  function tailBasePoints(edge, bx, by, tailW, w, h) {
+    if (edge === 'top' || edge === 'bottom') {
+      let xa = Math.max(0, Math.min(w, bx - tailW / 2));
+      let xb = Math.max(0, Math.min(w, bx + tailW / 2));
+      return edge === 'top' ? [{ x: xa, y: by }, { x: xb, y: by }] : [{ x: xb, y: by }, { x: xa, y: by }];
+    }
+    let ya = Math.max(0, Math.min(h, by - tailW / 2));
+    let yb = Math.max(0, Math.min(h, by + tailW / 2));
+    return edge === 'right' ? [{ x: bx, y: ya }, { x: bx, y: yb }] : [{ x: bx, y: yb }, { x: bx, y: ya }];
+  }
+
+  function tailGeometry(w, h, tailFx, tailFy) {
+    const fx = tailFx != null ? tailFx : 0.22;
+    const fy = tailFy != null ? tailFy : 1.22;
+    const base = computeTailBase(w, h, fx, fy);
+    if (!base) return null;
+    const tailW = Math.min(w, h) * 0.16;
+    const [p1, p2] = tailBasePoints(base.edge, base.bx, base.by, tailW, w, h);
+    return { edge: base.edge, p1, p2, tip: { x: base.tipX, y: base.tipY } };
+  }
+
+  // Traces a rounded (or, with r=0, straight-cornered) rect, replacing the
+  // straight run on tailInfo.edge with a detour out to the tail tip.
+  function traceRoundedWithTail(ctx, w, h, r, tailInfo) {
+    const onEdge = e => tailInfo && tailInfo.edge === e;
+    const detour = () => { ctx.lineTo(tailInfo.p1.x, tailInfo.p1.y); ctx.lineTo(tailInfo.tip.x, tailInfo.tip.y); ctx.lineTo(tailInfo.p2.x, tailInfo.p2.y); };
     ctx.beginPath();
     ctx.moveTo(r, 0);
+    if (onEdge('top')) detour();
     ctx.lineTo(w - r, 0);
     ctx.arcTo(w, 0, w, r, r);
+    if (onEdge('right')) detour();
     ctx.lineTo(w, h - r);
     ctx.arcTo(w, h, w - r, h, r);
-    ctx.lineTo(tailX + tailW, h);
-    ctx.lineTo(tailX, h + tailH);
-    ctx.lineTo(tailX - tailW * 0.4, h);
+    if (onEdge('bottom')) detour();
     ctx.lineTo(r, h);
     ctx.arcTo(0, h, 0, h - r, r);
+    if (onEdge('left')) detour();
     ctx.lineTo(0, r);
     ctx.arcTo(0, 0, r, 0, r);
     ctx.closePath();
+  }
+
+  function pathSpeech(ctx, w, h, obj) {
+    const r = Math.min(w, h) * 0.15;
+    traceRoundedWithTail(ctx, w, h, r, tailGeometry(w, h, obj && obj.tailFx, obj && obj.tailFy));
   }
 
   function pathCaption(ctx, w, h) {
@@ -472,30 +536,12 @@ const Comic = (() => {
     ctx.closePath();
   }
 
-  function pathAngular(ctx, w, h) {
-    const tailW = w * 0.14, tailH = h * 0.22, tailX = w * 0.22;
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(w, 0);
-    ctx.lineTo(w, h);
-    ctx.lineTo(tailX + tailW, h);
-    ctx.lineTo(tailX, h + tailH);
-    ctx.lineTo(tailX - tailW * 0.4, h);
-    ctx.lineTo(0, h);
-    ctx.closePath();
+  function pathAngular(ctx, w, h, obj) {
+    traceRoundedWithTail(ctx, w, h, 0, tailGeometry(w, h, obj && obj.tailFx, obj && obj.tailFy));
   }
 
-  function pathBox(ctx, w, h) {
-    const tailW = w * 0.12, tailH = h * 0.18, tailX = w * 0.2;
-    ctx.beginPath();
-    ctx.moveTo(0, 0);
-    ctx.lineTo(w, 0);
-    ctx.lineTo(w, h);
-    ctx.lineTo(tailX + tailW, h);
-    ctx.lineTo(tailX, h + tailH);
-    ctx.lineTo(tailX - tailW * 0.4, h);
-    ctx.lineTo(0, h);
-    ctx.closePath();
+  function pathBox(ctx, w, h, obj) {
+    traceRoundedWithTail(ctx, w, h, 0, tailGeometry(w, h, obj && obj.tailFx, obj && obj.tailFy));
   }
 
   function pathJagged(ctx, w, h) {
@@ -552,16 +598,16 @@ const Comic = (() => {
     lines.forEach((l, i) => ctx.fillText(l, obj.w / 2, startY + i * lh, maxWidth));
   }
 
-  function tracePathForStyle(ctx, style, w, h) {
-    if (style === 'speech')       pathSpeech(ctx, w, h);
+  function tracePathForStyle(ctx, style, w, h, obj) {
+    if (style === 'speech')       pathSpeech(ctx, w, h, obj);
     else if (style === 'shout')   pathShout(ctx, w, h);
     else if (style === 'cloud')   pathCloud(ctx, w, h);
     else if (style === 'caption') pathCaption(ctx, w, h);
-    else if (style === 'angular') pathAngular(ctx, w, h);
-    else if (style === 'box')     pathBox(ctx, w, h);
+    else if (style === 'angular') pathAngular(ctx, w, h, obj);
+    else if (style === 'box')     pathBox(ctx, w, h, obj);
     else if (style === 'jagged')  pathJagged(ctx, w, h);
     else if (style === 'electric') pathElectric(ctx, w, h);
-    else if (style === 'double')  pathSpeech(ctx, w, h);
+    else if (style === 'double')  pathSpeech(ctx, w, h, obj);
     else if (style === 'no-tail') roundRectPath(ctx, 0, 0, w, h, Math.min(w, h) * 0.2);
     else if (style === 'whisper') roundRectPath(ctx, 0, 0, w, h, Math.min(w, h) * 0.35);
     else /* think */              roundRectPath(ctx, 0, 0, w, h, Math.min(w, h) * 0.35);
@@ -570,7 +616,7 @@ const Comic = (() => {
   function drawBubble(ctx, obj) {
     withClipRotate(ctx, obj, ctx => {
       const style = obj.style || 'speech';
-      tracePathForStyle(ctx, style, obj.w, obj.h);
+      tracePathForStyle(ctx, style, obj.w, obj.h, obj);
 
       ctx.fillStyle = obj.fillColor || '#ffffff';
       ctx.fill();
@@ -584,7 +630,7 @@ const Comic = (() => {
         const inset = Math.max(3, Math.min(obj.w, obj.h) * 0.05);
         ctx.save();
         ctx.translate(inset, inset);
-        pathSpeech(ctx, obj.w - inset * 2, obj.h - inset * 2);
+        pathSpeech(ctx, obj.w - inset * 2, obj.h - inset * 2, obj);
         ctx.stroke();
         ctx.restore();
       }
@@ -664,6 +710,15 @@ const Comic = (() => {
     ctx.beginPath();
     ctx.arc(rot.x, rot.y, r / 2, 0, Math.PI * 2);
     ctx.fill();
+
+    if (obj.type === 'bubble' && hasTail(obj.style)) {
+      const fx = obj.tailFx != null ? obj.tailFx : 0.22, fy = obj.tailFy != null ? obj.tailFy : 1.22;
+      const tw = localToWorld(obj, fx * obj.w, fy * obj.h);
+      ctx.fillStyle = '#ff6b35';
+      ctx.beginPath();
+      ctx.arc(tw.x, tw.y, r / 2, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   function resizeCanvasElement() {
@@ -819,6 +874,7 @@ const Comic = (() => {
       w, h, rotation: 0, style,
       text: 'Texte…', font, fontSize,
       textColor, fillColor: '#ffffff', borderColor: '#000000',
+      tailFx: 0.22, tailFy: 1.22,
     };
     S.project.objects.push(bubble);
     S.selectedId = bubble.id;
@@ -932,6 +988,15 @@ const Comic = (() => {
       } else if (S.selectedId) {
         const sel = findObject(S.selectedId);
         if (sel) {
+          if (sel.type === 'bubble' && hasTail(sel.style)) {
+            const fx = sel.tailFx != null ? sel.tailFx : 0.22, fy = sel.tailFy != null ? sel.tailFy : 1.22;
+            const tw = localToWorld(sel, fx * sel.w, fy * sel.h);
+            if (dist(pos, tw) <= handleRadius() * 1.6) {
+              pushUndo();
+              dragState = { mode: 'tail', id: sel.id };
+              return;
+            }
+          }
           const handle = hitTestHandle(sel, pos);
           if (handle) {
             pushUndo();
@@ -1008,6 +1073,10 @@ const Comic = (() => {
           fy: Math.min(1.5, Math.max(-0.5, lp.y / obj.h)),
         };
         obj.vertices = verts;
+      } else if (dragState.mode === 'tail') {
+        const lp = worldToLocal(obj, pos.x, pos.y);
+        obj.tailFx = lp.x / obj.w;
+        obj.tailFy = lp.y / obj.h;
       } else if (dragState.mode === 'imgmove') {
         obj.imgOffsetX = (obj.imgOffsetX || 0) + (pos.x - dragState.last.x);
         obj.imgOffsetY = (obj.imgOffsetY || 0) + (pos.y - dragState.last.y);
