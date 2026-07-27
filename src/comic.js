@@ -428,7 +428,9 @@ const Comic = (() => {
   // fixed bottom-left tail. hasTail() lists the styles whose path function
   // draws this movable tail (others keep a fixed/no tail).
   function hasTail(style) {
-    return style === 'speech' || style === 'angular' || style === 'box' || style === 'double';
+    // shout/jagged (starburst impact shapes), caption (narration box) and
+    // no-tail are deliberately tail-less.
+    return ['speech', 'angular', 'box', 'double', 'whisper', 'electric', 'think', 'cloud'].includes(style);
   }
 
   // Finds where the ray from the rect center through the tail tip exits the
@@ -558,22 +560,38 @@ const Comic = (() => {
     ctx.closePath();
   }
 
-  function pathElectric(ctx, w, h) {
+  function pathElectric(ctx, w, h, obj) {
     const r = Math.min(w, h) * 0.12;
-    const tailW = w * 0.13, tailH = h * 0.2, tailX = w * 0.24;
     const points = 20;
+    const cx = w / 2, cy = h / 2;
+    const fx = obj && obj.tailFx != null ? obj.tailFx : 0.22;
+    const fy = obj && obj.tailFy != null ? obj.tailFy : 1.22;
+    const tipX = fx * w, tipY = fy * h;
+    const targetAngle = (Math.atan2(tipY - cy, tipX - cx) + Math.PI * 2) % (Math.PI * 2);
+    const tailW = Math.min(w, h) * 0.16;
+    const loopPoint = (angle, jitter) => ({
+      x: cx + Math.cos(angle) * (w / 2 - r) * jitter,
+      y: cy + Math.sin(angle) * (h / 2 - r) * jitter,
+    });
+
     ctx.beginPath();
+    let inserted = false, prevAngle = 0;
     for (let i = 0; i <= points; i++) {
-      const t = i / points;
-      const angle = t * Math.PI * 2;
+      const angle = (i / points) * Math.PI * 2;
       const jitter = 1 + (i % 3 === 0 ? 0.12 : -0.06);
-      const x = w / 2 + Math.cos(angle) * (w / 2 - r) * jitter;
-      const y = h / 2 + Math.sin(angle) * (h / 2 - r) * jitter;
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      const pt = loopPoint(angle, jitter);
+      if (i === 0) ctx.moveTo(pt.x, pt.y); else ctx.lineTo(pt.x, pt.y);
+      if (!inserted && i > 0 && prevAngle <= targetAngle && angle > targetAngle) {
+        const base = loopPoint(targetAngle, 1);
+        const tangent = targetAngle + Math.PI / 2;
+        const half = tailW / 2;
+        ctx.lineTo(base.x - Math.cos(tangent) * half, base.y - Math.sin(tangent) * half);
+        ctx.lineTo(tipX, tipY);
+        ctx.lineTo(base.x + Math.cos(tangent) * half, base.y + Math.sin(tangent) * half);
+        inserted = true;
+      }
+      prevAngle = angle;
     }
-    ctx.lineTo(tailX + tailW, h);
-    ctx.lineTo(tailX, h + tailH);
-    ctx.lineTo(tailX - tailW * 0.4, h);
     ctx.closePath();
   }
 
@@ -606,11 +624,37 @@ const Comic = (() => {
     else if (style === 'angular') pathAngular(ctx, w, h, obj);
     else if (style === 'box')     pathBox(ctx, w, h, obj);
     else if (style === 'jagged')  pathJagged(ctx, w, h);
-    else if (style === 'electric') pathElectric(ctx, w, h);
+    else if (style === 'electric') pathElectric(ctx, w, h, obj);
     else if (style === 'double')  pathSpeech(ctx, w, h, obj);
     else if (style === 'no-tail') roundRectPath(ctx, 0, 0, w, h, Math.min(w, h) * 0.2);
-    else if (style === 'whisper') roundRectPath(ctx, 0, 0, w, h, Math.min(w, h) * 0.35);
-    else /* think */              roundRectPath(ctx, 0, 0, w, h, Math.min(w, h) * 0.35);
+    else if (style === 'whisper') traceRoundedWithTail(ctx, w, h, Math.min(w, h) * 0.35, tailGeometry(w, h, obj && obj.tailFx, obj && obj.tailFy));
+    else /* think/cloud handled above; caption/no-tail have no tail */
+                                  roundRectPath(ctx, 0, 0, w, h, Math.min(w, h) * 0.35);
+  }
+
+  // Think/cloud bubbles point with a shrinking chain of circles instead of a
+  // triangular tail. Starts at the body's edge in the tail direction and
+  // marches toward the tip — same obj.tailFx/tailFy as the other styles.
+  function drawTrailingBubbles(ctx, obj) {
+    const w = obj.w, h = obj.h;
+    const fx = obj.tailFx != null ? obj.tailFx : 0.22;
+    const fy = obj.tailFy != null ? obj.tailFy : 1.22;
+    const tipX = fx * w, tipY = fy * h;
+    const base = computeTailBase(w, h, fx, fy);
+    const startX = base ? base.bx : w / 2, startY = base ? base.by : h / 2;
+    const dx = tipX - startX, dy = tipY - startY;
+    const d = Math.hypot(dx, dy) || 1;
+    const ux = dx / d, uy = dy / d;
+    let bx = startX, by = startY, r = Math.min(w, h) * 0.05;
+    const step = Math.max(r * 1.6, d / 3.2);
+    for (let i = 0; i < 3 && r > 2; i++) {
+      ctx.beginPath();
+      ctx.arc(bx, by, r, 0, Math.PI * 2);
+      ctx.fillStyle = obj.fillColor || '#ffffff';
+      ctx.fill();
+      ctx.stroke();
+      bx += ux * step; by += uy * step; r *= 0.65;
+    }
   }
 
   function drawBubble(ctx, obj) {
@@ -635,17 +679,7 @@ const Comic = (() => {
         ctx.restore();
       }
 
-      if (style === 'think') {
-        let bx = obj.w * 0.18, by = obj.h + 6, r = Math.min(obj.w, obj.h) * 0.05;
-        for (let i = 0; i < 3 && r > 2; i++) {
-          ctx.beginPath();
-          ctx.arc(bx, by, r, 0, Math.PI * 2);
-          ctx.fillStyle = obj.fillColor || '#ffffff';
-          ctx.fill();
-          ctx.stroke();
-          bx -= r * 1.6; by += r * 1.6; r *= 0.65;
-        }
-      }
+      if (style === 'think' || style === 'cloud') drawTrailingBubbles(ctx, obj);
 
       drawBubbleText(ctx, obj);
     });
