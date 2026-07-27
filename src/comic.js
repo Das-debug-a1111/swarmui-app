@@ -832,6 +832,30 @@ const Comic = (() => {
     render();
   }
 
+  // ── Copy/paste (bubbles & SFX) ────────────────────────────────────────────
+  // In-memory clipboard (not the system clipboard) — mirrors the app's
+  // undo-stack pattern, just for a single object snapshot.
+  let objectClipboard = null;
+
+  function copySelected() {
+    const sel = S.selectedId && findObject(S.selectedId);
+    if (!sel || (sel.type !== 'bubble' && sel.type !== 'sfx')) return;
+    objectClipboard = JSON.parse(JSON.stringify(sel));
+  }
+
+  function pasteClipboard() {
+    if (!objectClipboard) return;
+    pushUndo();
+    const copy = JSON.parse(JSON.stringify(objectClipboard));
+    copy.id = genId();
+    copy.x += 24;
+    copy.y += 24;
+    S.project.objects.push(copy);
+    S.selectedId = copy.id;
+    syncBubbleControls(copy);
+    render();
+  }
+
   // ── Bubble text editor (floating textarea) ───────────────────────────────
   function openBubbleEditor(bubble) {
     pushUndo();
@@ -942,6 +966,9 @@ const Comic = (() => {
     if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelected(); return; }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); return; }
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); return; }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') { e.preventDefault(); copySelected(); return; }
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') { e.preventDefault(); pasteClipboard(); return; }
+    if (e.ctrlKey || e.metaKey) return;
     if (e.key.toLowerCase() === 's' || e.key.toLowerCase() === 'v') { setTool('select'); return; }
     if (e.key.toLowerCase() === 'd') { setTool('draw'); return; }
     if (e.key.toLowerCase() === 'e') { setTool('eraser'); return; }
@@ -1231,6 +1258,8 @@ const Comic = (() => {
     q('comic-zoom-out').addEventListener('click', () => setViewZoom(Math.max(0.1, (S.viewZoom || 1) - 0.1)));
     q('comic-zoom-fit').addEventListener('click', () => setViewZoom(null));
     q('comic-btn-delete').addEventListener('click', deleteSelected);
+    q('comic-obj-copy').addEventListener('click', copySelected);
+    q('comic-obj-paste').addEventListener('click', pasteClipboard);
     q('comic-btn-undo').addEventListener('click', undo);
     q('comic-btn-redo').addEventListener('click', redo);
     q('comic-btn-new').addEventListener('click', newProject);
