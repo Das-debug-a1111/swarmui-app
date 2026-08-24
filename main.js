@@ -291,9 +291,11 @@ autoUpdater.on('update-downloaded',  (info)     => sendToWindow('update-download
 autoUpdater.on('error',              (err)      => sendToWindow('update-error', err.message));
 
 app.whenReady().then(() => {
-  // Needed for the Comic tab's font picker (queryLocalFonts) to list system fonts.
+  // 'local-fonts' is for the Comic tab's font picker (queryLocalFonts);
+  // clipboard permissions are for the copy-to-clipboard buttons used across
+  // every tab's gallery/lightbox.
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
-    callback(permission === 'local-fonts');
+    callback(['local-fonts', 'clipboard-read', 'clipboard-sanitized-write'].includes(permission));
   });
   createWindow();
   if (app.isPackaged) autoUpdater.checkForUpdates().catch(() => {});
