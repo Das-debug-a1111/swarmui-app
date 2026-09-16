@@ -1420,6 +1420,7 @@ function switchTab(tab) {
   const isPng   = tab === 'pnginfo';
   const isWm    = tab === 'watermark';
   const isComic = tab === 'comic';
+  const isTw    = tab === 'twitter';
   const isIps   = tab === 'inpaintsched';
   const isMdl   = tab === 'models';
 
@@ -1430,6 +1431,7 @@ function switchTab(tab) {
   $('view-pnginfo').classList.toggle('active', isPng);
   $('view-watermark').classList.toggle('active', isWm);
   $('view-comic').classList.toggle('active', isComic);
+  $('view-twitter').classList.toggle('active', isTw);
   $('view-ips').classList.toggle('active', isIps);
   $('view-models').classList.toggle('active', isMdl);
 
@@ -1438,6 +1440,7 @@ function switchTab(tab) {
   if (isSch)   { Scheduler.init(); Scheduler.onShow(); }
   if (isWm)    { Watermark.init(); }
   if (isComic) { Comic.init(); Comic.onShow(); }
+  if (isTw)    { Twitter.init(); Twitter.onShow(); }
   if (isIps)   { InpaintScheduler.init(); InpaintScheduler.onShow(); }
   if (isMdl)   { ModelDL.onShow(); }
 }

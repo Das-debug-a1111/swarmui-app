@@ -28,6 +28,7 @@
       <div class="tab" data-tab="pnginfo">PNG Info</div>
       <div class="tab" data-tab="watermark">Watermark</div>
       <div class="tab" data-tab="comic">Comic</div>
+      <div class="tab" data-tab="twitter">Twitter</div>
       <div class="tab" data-tab="inpaintsched">Inpaint Scheduler</div>
       <div class="tab" data-tab="models">Models</div>
     </div>
@@ -1353,6 +1354,26 @@
     <input type="file" id="comic-file-image" accept="image/*" style="display:none">
   </div><!-- /view-comic -->
 
+  <!-- ── Twitter challenge view ──────────────────────────────────────────── -->
+  <div id="view-twitter">
+    <div id="tw-body">
+      <div id="tw-header">
+        <h2>🐦 Défi Twitter</h2>
+        <button class="tw-btn tw-btn-primary" id="tw-roll-btn">🎲 Nouveau défi</button>
+        <span class="tw-preset-badge" id="tw-preset-badge" style="display:none"></span>
+      </div>
+
+      <div id="tw-cards"></div>
+      <div id="tw-empty">Clique "Nouveau défi" pour tirer 3 persos au sort.</div>
+
+      <div id="tw-hist-hdr">
+        <h3>Historique</h3>
+        <span id="tw-hist-count"></span>
+      </div>
+      <div id="tw-hist-list"></div>
+    </div>
+  </div><!-- /view-twitter -->
+
   <!-- Comic Auto-pack modal -->
   <div class="sws-overlay" id="comic-autopack-overlay">
     <div class="sws-modal" style="max-width:720px">
@@ -1810,6 +1831,7 @@
 <script src="src/comic.js"></script>
 <script src="src/inpaintScheduler.js"></script>
 <script src="src/flux.js"></script>
+<script src="src/twitter.js"></script>
 <script src="src/app.js"></script>
 </body>
 </html>
