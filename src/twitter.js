@@ -12,11 +12,36 @@ const Twitter = (() => {
   const HIST_MAX           = 200;
   const PRESET_LABELS      = ['Bimbo', 'Futa'];
 
+  // Scene ideas — one combo gets auto-inserted into the prompt (the ★ one),
+  // the other 3 are shown as inspiration for the rest of the 4-image batch.
+  const LOCATIONS = [
+    'chambre à coucher', 'salle de bain avec douche', 'cuisine', 'piscine extérieure',
+    'plage au coucher du soleil', 'vestiaire de sport', 'salle de sport', 'bureau après les heures',
+    'bibliothèque', 'salle de classe vide', 'forêt brumeuse', 'ruelle la nuit',
+    'voiture garée', 'chambre d\'hôtel', 'toit-terrasse en ville', 'cabine d\'essayage',
+    'onsen japonais', 'jardin fleuri', 'balcon avec vue', 'boîte de nuit',
+    'café cosy', 'ascenseur', 'dressing', 'jacuzzi',
+  ];
+  const AMBIANCES = [
+    'romantique', 'joueuse et taquine', 'mystérieuse', 'douce et cosy',
+    'séduisante', 'rêveuse', 'énergique', 'pluie et néons',
+    'lumière dorée du coucher de soleil', 'néons cyberpunk', 'lumière douce du matin', 'éclairage aux bougies',
+    'vapeur et chaleur', 'décontractée', 'festive', 'orageuse et dramatique',
+    'clair de lune', 'pastel kawaii', 'luxueuse et glamour', 'innocente en apparence',
+  ];
+  const OUTFITS = [
+    'lingerie en dentelle', 'maillot de bain une pièce', 'uniforme scolaire', 'tenue de maid',
+    'streetwear oversize', 'tenue de sport moulante', 'tenue de bureau ajustée', 'kimono',
+    'robe de soirée', 'hoodie trop grand', 'tenue de cosplay', 'simple serviette',
+    'peignoir entrouvert', 'bikini string', 'combinaison en latex', 'robe d\'été légère',
+    'tenue de bunny girl', 'jean taille haute et crop top', 'tenue gothique', 'nuisette transparente',
+  ];
+
   const S = {
     loaded:    false,
     allChars:  [],   // [{name, series}]
     tagAssist: {},
-    current:   null, // { label, chars: [{name,series}, ...] }
+    current:   null, // { label, chars: [{name,series}, ...], ideas: [{lieu,ambiance,outfit}, ...] }
   };
   const thumbCache = new Map();
   let initialized = false;
@@ -95,11 +120,38 @@ const Twitter = (() => {
     return picks;
   }
 
+  function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+  function rollOneIdea() { return { lieu: pick(LOCATIONS), ambiance: pick(AMBIANCES), outfit: pick(OUTFITS) }; }
+  function ideaKey(idea) { return idea.lieu + '|' + idea.ambiance + '|' + idea.outfit; }
+  function ideaText(idea) { return `${idea.lieu}, ${idea.ambiance}, ${idea.outfit}`; }
+
+  function rollIdeas(n = 4) {
+    const ideas = [], seen = new Set();
+    let guard = 0;
+    while (ideas.length < n && guard++ < 200) {
+      const idea = rollOneIdea();
+      const key = ideaKey(idea);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      ideas.push(idea);
+    }
+    return ideas;
+  }
+
+  function rerollIdea(i) {
+    if (!S.current) return;
+    const otherKeys = new Set(S.current.ideas.map((idea, idx) => idx === i ? null : ideaKey(idea)).filter(Boolean));
+    let idea, guard = 0;
+    do { idea = rollOneIdea(); } while (otherKeys.has(ideaKey(idea)) && guard++ < 50);
+    S.current.ideas[i] = idea;
+    renderIdeas();
+  }
+
   function roll() {
     const label = PRESET_LABELS[Math.floor(Math.random() * PRESET_LABELS.length)];
     const chars = pickThree();
     if (!chars.length) return;
-    S.current = { label, chars };
+    S.current = { label, chars, ideas: rollIdeas(4) };
     render();
   }
 
@@ -116,6 +168,24 @@ const Twitter = (() => {
     const wrap = $('tw-cards');
     wrap.innerHTML = '';
     S.current.chars.forEach(c => wrap.appendChild(buildCard(c)));
+
+    renderIdeas();
+  }
+
+  function renderIdeas() {
+    const wrap = $('tw-ideas');
+    if (!wrap || !S.current?.ideas) return;
+    wrap.innerHTML = '';
+    S.current.ideas.forEach((idea, i) => {
+      const row = document.createElement('div');
+      row.className = 'tw-idea' + (i === 0 ? ' tw-idea-main' : '');
+      row.innerHTML = `
+        <span class="tw-idea-num">${i === 0 ? '★' : i + 1}</span>
+        <span class="tw-idea-text">${esc(idea.lieu)} · ${esc(idea.ambiance)} · ${esc(idea.outfit)}</span>
+        <button class="tw-idea-reroll" title="Retirer cette idée">🔀</button>`;
+      row.querySelector('.tw-idea-reroll').addEventListener('click', () => rerollIdea(i));
+      wrap.appendChild(row);
+    });
   }
 
   function buildCard(char) {
@@ -141,18 +211,24 @@ const Twitter = (() => {
     if (entry) applyPreset(entry);
     else toast(`⚠️ Preset "${label}" introuvable — sauvegarde-le dans Presets d'abord`);
 
+    const idea = S.current.ideas?.[0];
     const posEl = $('inp-positive');
     if (posEl) {
-      const extra = S.tagAssist[char.name] ? ', ' + S.tagAssist[char.name] : '';
-      const base = posEl.value.trim();
-      posEl.value = (base ? base + ', ' : '') + char.name + extra;
+      const extra    = S.tagAssist[char.name] ? ', ' + S.tagAssist[char.name] : '';
+      const ideaTxt  = idea ? ', ' + ideaText(idea) : '';
+      const base = posEl.value.trim().replace(/,\s*$/, '');
+      posEl.value = (base ? base + ', ' : '') + char.name + extra + ideaTxt;
       posEl.dispatchEvent(new Event('input', { bubbles: true }));
     }
 
     const countEl = $('sel-count');
     if (countEl) { countEl.value = '4'; countEl.dispatchEvent(new Event('change', { bubbles: true })); }
 
-    addHistory({ name: char.name, series: char.series, preset: label, presetFound: !!entry });
+    addHistory({
+      name: char.name, series: char.series, preset: label, presetFound: !!entry,
+      idea: idea ? ideaText(idea) : '',
+      ideas: (S.current.ideas || []).map(ideaText),
+    });
 
     switchTab('txt2img');
     toast(`🐦 Défi prêt : ${char.name} · ${label}`);
@@ -172,9 +248,12 @@ const Twitter = (() => {
       const row = document.createElement('div');
       row.className = 'tw-hist-row';
       const dateStr = new Date(e.date).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' });
+      const otherIdeas = (e.ideas || []).slice(1);
+      if (otherIdeas.length) row.title = '3 autres idées :\n' + otherIdeas.join('\n');
       row.innerHTML = `
         <img class="tw-hist-thumb" alt="">
         <span class="tw-hist-name">${esc(e.name)}</span>
+        ${e.idea ? `<span class="tw-hist-idea">${esc(e.idea)}</span>` : ''}
         <span class="tw-preset-badge tw-preset-${esc((e.preset || '').toLowerCase())}" style="margin-left:0">${esc(e.preset || '')}</span>
         <span class="tw-hist-date">${dateStr}</span>
         <span class="tw-hist-posted${e.posted ? ' done' : ''}">${e.posted ? '✅ Posté' : '☐ Posté'}</span>`;

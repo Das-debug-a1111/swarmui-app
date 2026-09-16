@@ -2355,6 +2355,32 @@ body.cs-panel-open #view-scheduler.active {
 .tw-preset-badge.tw-preset-futa  { color: #7ecbff; border-color: #7ecbff; background: rgba(126,203,255,.1); }
 .tw-preset-badge.tw-preset-missing { color: var(--danger,#e5534b); border-color: var(--danger,#e5534b); }
 
+#tw-ideas { display: flex; flex-direction: column; gap: 6px; margin-bottom: 20px; }
+.tw-idea {
+  display: flex; align-items: center; gap: 10px;
+  background: var(--bg2); border: 1px solid var(--border); border-radius: 6px;
+  padding: 7px 10px; font-size: 12px;
+}
+.tw-idea-main { border-color: var(--accent); background: rgba(88,166,255,.08); }
+.tw-idea-num {
+  width: 20px; height: 20px; border-radius: 50%; background: var(--bg4);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700; color: var(--muted); flex-shrink: 0;
+}
+.tw-idea-main .tw-idea-num { background: var(--accent); color: #000; }
+.tw-idea-text { flex: 1; color: var(--text2); }
+.tw-idea-main .tw-idea-text { color: var(--text1); font-weight: 600; }
+.tw-idea-reroll {
+  background: none; border: none; color: var(--muted); cursor: pointer;
+  font-size: 13px; padding: 2px 4px; border-radius: 4px; flex-shrink: 0;
+}
+.tw-idea-reroll:hover { color: var(--accent); background: var(--bg3); }
+
+.tw-hist-idea {
+  color: var(--muted); font-size: 11px; flex-shrink: 1; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px;
+}
+
 #tw-cards { display: flex; gap: 16px; justify-content: center; margin-bottom: 8px; }
 .tw-card {
   width: 210px; height: 280px; border-radius: 10px; background: var(--bg2);
