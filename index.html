@@ -22,6 +22,7 @@
     <div class="app-title">Swarm-App</div>
     <div class="tabs">
       <div class="tab active" data-tab="txt2img">Txt2Img</div>
+      <div class="tab" data-tab="flux">Flux</div>
       <div class="tab" data-tab="inpaint">Inpaint</div>
       <div class="tab" data-tab="scheduler">Scheduler</div>
       <div class="tab" data-tab="pnginfo">PNG Info</div>
@@ -363,6 +364,153 @@
   </div><!-- /main -->
 
   </div><!-- /view-txt2img -->
+
+  <!-- ── Flux view ───────────────────────────────────────────────────────── -->
+  <div id="view-flux">
+
+    <!-- Sidebar -->
+    <div id="flux-sidebar">
+
+      <div class="sidebar-section">
+        <div class="sidebar-section-hdr" data-section="flux-model">
+          <span>Model</span><span class="arrow">▾</span>
+        </div>
+        <div class="sidebar-section-body" id="sec-flux-model">
+          <div class="field">
+            <div class="field-label">Checkpoint (Flux.1 uniquement)</div>
+            <select class="inp" id="flux-sel-model"><option value="">— Connect first —</option></select>
+          </div>
+          <div id="flux-variant-badge" class="flux-variant-badge" style="display:none"></div>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="sidebar-section-hdr" data-section="flux-generation">
+          <span>Generation</span><span class="arrow">▾</span>
+        </div>
+        <div class="sidebar-section-body" id="sec-flux-generation">
+          <div class="field">
+            <div class="field-label">Steps <span id="flux-lbl-steps">20</span></div>
+            <div class="slider-row">
+              <input type="range" class="slider" id="flux-sl-steps" min="1" max="50" step="1" value="20">
+              <input type="text" class="inp" id="flux-inp-steps" value="20" style="width:55px;text-align:center">
+            </div>
+          </div>
+          <div class="field">
+            <div class="field-label">CFG Scale <span id="flux-lbl-cfg">1</span></div>
+            <div class="slider-row">
+              <input type="range" class="slider" id="flux-sl-cfg" min="1" max="10" step="0.1" value="1">
+              <input type="text" class="inp" id="flux-inp-cfg" value="1" style="width:55px;text-align:center">
+            </div>
+            <div class="field-hint">Flux attend CFG=1 — le negative prompt ne fonctionne qu'au-dessus de 1.</div>
+          </div>
+          <div class="field" id="flux-guidance-field">
+            <div class="field-label">Flux Guidance Scale <span id="flux-lbl-guidance">3.5</span></div>
+            <div class="slider-row">
+              <input type="range" class="slider" id="flux-sl-guidance" min="0" max="10" step="0.1" value="3.5">
+              <input type="text" class="inp" id="flux-inp-guidance" value="3.5" style="width:55px;text-align:center">
+            </div>
+            <div class="field-hint">Ne s'applique pas à Schnell. Valeur distillée propre à Flux-Dev, pas un CFG classique.</div>
+          </div>
+          <div class="field">
+            <div class="field-label">Sampler</div>
+            <select class="inp" id="flux-sel-sampler"></select>
+          </div>
+          <div class="field">
+            <div class="field-label">Scheduler</div>
+            <select class="inp" id="flux-sel-scheduler"></select>
+          </div>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="sidebar-section-hdr" data-section="flux-resolution">
+          <span>Resolution</span><span class="arrow">▾</span>
+        </div>
+        <div class="sidebar-section-body" id="sec-flux-resolution">
+          <div class="ratio-grid">
+            <button class="ratio-btn active" data-w="1024" data-h="1024">1:1<br>1024×1024</button>
+            <button class="ratio-btn" data-w="1152" data-h="896">4:3<br>1152×896</button>
+            <button class="ratio-btn" data-w="896" data-h="1152">3:4<br>896×1152</button>
+            <button class="ratio-btn" data-w="1344" data-h="768">16:9<br>1344×768</button>
+            <button class="ratio-btn" data-w="768" data-h="1344">9:16<br>768×1344</button>
+          </div>
+          <div class="field" style="display:flex;gap:6px;align-items:center;margin-top:6px">
+            <input type="number" class="inp" id="flux-inp-width" value="1024" min="256" max="1920" step="64" style="flex:1;text-align:center">
+            <span style="color:var(--muted)">×</span>
+            <input type="number" class="inp" id="flux-inp-height" value="1024" min="256" max="1920" step="64" style="flex:1;text-align:center">
+          </div>
+        </div>
+      </div>
+
+      <div class="sidebar-section">
+        <div class="sidebar-section-hdr" data-section="flux-models-info">
+          <span>Modèles à installer</span><span class="arrow">▾</span>
+        </div>
+        <div class="sidebar-section-body" id="sec-flux-models-info">
+          <div class="flux-info-block">
+            <strong>Recommandé (la plupart des cartes, dont RTX 4080) — GGUF</strong>
+            <div>Dev: <a href="https://huggingface.co/city96/FLUX.1-dev-gguf" target="_blank">city96/FLUX.1-dev-gguf</a></div>
+            <div>Schnell: <a href="https://huggingface.co/city96/FLUX.1-schnell-gguf" target="_blank">city96/FLUX.1-schnell-gguf</a></div>
+            <div class="field-hint">Q6_K = meilleure qualité, Q4_K_S = moins de VRAM. Dossier: <code>(Swarm)/Models/diffusion_models</code></div>
+          </div>
+          <div class="flux-info-block">
+            <strong>Alternative rapide — fp8</strong>
+            <div>Dev: <a href="https://huggingface.co/Comfy-Org/flux1-dev" target="_blank">Comfy-Org/flux1-dev</a></div>
+            <div>Schnell: <a href="https://huggingface.co/Comfy-Org/flux1-schnell" target="_blank">Comfy-Org/flux1-schnell</a></div>
+            <div class="field-hint">Dossier: <code>(Swarm)/Models/Stable-Diffusion</code></div>
+          </div>
+          <div class="field-hint">VAE + text encoders (CLIP-L, T5-XXL) : téléchargés automatiquement par SwarmUI, rien à faire.</div>
+        </div>
+      </div>
+
+    </div><!-- /flux-sidebar -->
+
+    <!-- Main -->
+    <div id="flux-main">
+
+      <div id="flux-prompt-area">
+        <div class="prompt-wrap">
+          <div class="prompt-label">Positive prompt</div>
+          <textarea class="prompt" id="flux-inp-positive" rows="3" placeholder="Describe the image you want to generate…"></textarea>
+        </div>
+        <div class="prompt-wrap">
+          <div class="prompt-label">Negative prompt</div>
+          <textarea class="prompt" id="flux-inp-negative" rows="2" placeholder="What to avoid… (nécessite CFG > 1)"></textarea>
+        </div>
+      </div>
+
+      <div id="flux-action-bar">
+        <div class="images-count-wrap">
+          <label>Images</label>
+          <select class="inp" id="flux-sel-count" style="width:60px">
+            <option value="1">1</option>
+            <option value="2">2</option>
+            <option value="4">4</option>
+            <option value="8">8</option>
+          </select>
+        </div>
+        <button id="flux-btn-generate" disabled>Generate</button>
+      </div>
+
+      <div id="flux-progress-wrap" class="hidden">
+        <div id="flux-progress-bar-track"><div id="flux-progress-bar"></div></div>
+        <div id="flux-progress-info">
+          <span id="flux-progress-label">Generating…</span>
+          <span id="flux-progress-pct">0%</span>
+        </div>
+      </div>
+
+      <div id="flux-gallery">
+        <div class="gallery-empty" id="flux-gallery-empty">
+          <div class="gallery-empty-icon">🎨</div>
+          <div>Generate images to see them here</div>
+        </div>
+      </div>
+
+    </div><!-- /flux-main -->
+
+  </div><!-- /view-flux -->
 
   <!-- ── Inpaint view ─────────────────────────────────────────────────────── -->
   <div id="view-inpaint">
@@ -1095,8 +1243,14 @@
       </select>
       <input type="color" id="comic-text-color" value="#000000" title="Text color">
       <label class="wm-tlbl">Size <span id="comic-text-size-val"></span></label>
-      <input type="range" id="comic-text-size" min="8" max="200" step="1" value="32" title="Text size (bubble / SFX)">
+      <input type="range" id="comic-text-size" min="8" max="200" step="1" value="32" title="Text size (bubble / SFX / texte libre)">
+      <button class="comic-tbtn comic-toggle-btn" id="comic-toggle-bold" title="Gras">𝐁</button>
+      <button class="comic-tbtn comic-toggle-btn" id="comic-toggle-italic" title="Italique">𝑰</button>
+      <button class="comic-tbtn comic-toggle-btn" id="comic-toggle-underline" title="Souligné">U̲</button>
+      <button class="comic-tbtn comic-toggle-btn" id="comic-toggle-highlight" title="Surligner (texte libre uniquement)">🖍</button>
+      <input type="color" id="comic-fill-color" value="#ffffff" title="Couleur de fond (bulle/SFX) ou de surlignage (texte libre)">
       <button class="comic-tbtn" id="comic-add-bubble">💬 Add Bubble</button>
+      <button class="comic-tbtn" id="comic-add-text">🔤 Add Text</button>
       <select class="comic-sel" id="comic-sfx-bg" title="SFX background shape">
         <option value="none">No background</option>
         <option value="shout">Burst</option>
@@ -1168,21 +1322,96 @@
       <button class="comic-tbtn" id="comic-zoom-in" title="Zoom in">＋</button>
       <button class="comic-tbtn" id="comic-zoom-fit" title="Fit to view">⇲ Fit</button>
       <span class="comic-sep"></span>
+      <button class="comic-tbtn" id="comic-btn-autopack" title="Générer des pages automatiquement à partir d'images de ratios variés">🧩 Auto-pack</button>
       <button class="comic-tbtn" id="comic-btn-new">🆕 New</button>
       <button class="comic-tbtn" id="comic-btn-save">💾 Save</button>
       <button class="comic-tbtn" id="comic-btn-load">📂 Load</button>
       <input type="file" id="comic-file-project" accept=".json" style="display:none">
       <span class="comic-sep"></span>
       <button class="comic-tbtn" id="comic-btn-copy" title="Copy image">📋 Copy</button>
-      <button class="comic-tbtn comic-tbtn-primary" id="comic-btn-export">⬇ Export PNG</button>
+      <select class="comic-sel" id="comic-export-format" style="display:none" title="Format d'export (plusieurs pages)">
+        <option value="zip">PNG (zip)</option>
+        <option value="pdf">PDF</option>
+      </select>
+      <button class="comic-tbtn comic-tbtn-primary" id="comic-btn-export">⬇ Export</button>
     </div>
-    <div id="comic-canvas-area">
-      <div id="comic-canvas-wrap">
-        <canvas id="comic-canvas" width="1080" height="1080"></canvas>
+    <div id="comic-pages-bar">
+      <div id="comic-pages-strip"></div>
+      <button class="comic-tbtn" id="comic-add-page" title="Ajouter une page (même taille que la page actuelle)">＋ Page</button>
+    </div>
+    <div id="comic-workspace">
+      <div id="comic-canvas-area">
+        <div id="comic-canvas-wrap">
+          <canvas id="comic-canvas" width="1080" height="1080"></canvas>
+        </div>
+      </div>
+      <div id="comic-layers-panel">
+        <div class="comic-panel-hdr">Calques</div>
+        <div id="comic-layers-list"></div>
       </div>
     </div>
     <input type="file" id="comic-file-image" accept="image/*" style="display:none">
   </div><!-- /view-comic -->
+
+  <!-- Comic Auto-pack modal -->
+  <div class="sws-overlay" id="comic-autopack-overlay">
+    <div class="sws-modal" style="max-width:720px">
+      <div class="sws-modal-head">
+        <span>🧩 Auto-pack — planches à partir d'images de ratios variés</span>
+        <button class="sws-modal-close" id="comic-ap-close">×</button>
+      </div>
+      <div class="sws-modal-body">
+        <div class="comic-ap-import-row">
+          <button class="comic-tbtn" id="comic-ap-btn-folder">📁 Ouvrir un dossier</button>
+          <button class="comic-tbtn" id="comic-ap-btn-files">🖼 Ajouter des fichiers directement</button>
+          <input type="file" id="comic-ap-file-folder" webkitdirectory multiple accept="image/*" style="display:none">
+          <input type="file" id="comic-ap-file-files" multiple accept="image/*" style="display:none">
+        </div>
+        <div class="comic-ap-section-label">Galerie du dossier <span class="field-hint">— glisse une image vers la file ci-dessous, ou clique pour l'ajouter</span></div>
+        <div id="comic-ap-gallery" class="comic-ap-gallery">
+          <div class="comic-ap-empty">Ouvre un dossier pour voir ses images ici.</div>
+        </div>
+        <div class="comic-ap-section-label">
+          File à générer (ordre = ordre final dans la planche)
+          <button class="comic-tbtn comic-tbtn-danger comic-ap-clear-btn" id="comic-ap-btn-clear">🗑 Vider la file</button>
+        </div>
+        <div id="comic-ap-queue" class="comic-ap-queue">
+          <div class="comic-ap-empty" id="comic-ap-empty">Aucune image dans la file — glisse-en depuis la galerie ci-dessus, ou ajoute des fichiers directement.</div>
+        </div>
+        <div class="comic-ap-params">
+          <div class="field">
+            <div class="field-label">Largeur de page</div>
+            <input type="number" class="comic-num" id="comic-ap-width" min="200" max="8000">
+          </div>
+          <div class="field">
+            <div class="field-label">Gouttière</div>
+            <input type="number" class="comic-num" id="comic-ap-gutter" min="0" max="200" value="12">
+          </div>
+          <div class="field">
+            <div class="field-label">Marge</div>
+            <input type="number" class="comic-num" id="comic-ap-margin" min="0" max="200" value="24">
+          </div>
+          <div class="field">
+            <div class="field-label">Fond</div>
+            <input type="color" id="comic-ap-bg" value="#000000">
+          </div>
+        </div>
+        <label class="wm-tlbl comic-ap-paginate-row">
+          <input type="checkbox" id="comic-ap-paginate">
+          Paginer automatiquement si ça dépasse
+          <input type="number" class="comic-num" id="comic-ap-maxheight" min="200" max="20000" disabled>
+        </label>
+        <div class="comic-ap-section-label">Disposition <span class="field-hint">— clique celle que tu préfères</span></div>
+        <div id="comic-ap-dispositions" class="comic-ap-dispositions">
+          <div class="comic-ap-empty">Ajoute des images à la file pour comparer des dispositions.</div>
+        </div>
+      </div>
+      <div class="sws-modal-foot">
+        <button class="comic-tbtn" id="comic-ap-cancel">Annuler</button>
+        <button class="comic-tbtn comic-tbtn-primary" id="comic-ap-generate">Générer</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Preset picker modal -->
   <div class="sws-overlay" id="sws-preset-modal">
@@ -1569,6 +1798,7 @@
 </div>
 
 <script src="src/jszip.min.js"></script>
+<script src="src/jspdf.umd.min.js"></script>
 <script src="src/api.js"></script>
 <script src="src/tagcomplete.js"></script>
 <script src="src/charselector.js"></script>
@@ -1579,6 +1809,7 @@
 <script src="src/watermark.js"></script>
 <script src="src/comic.js"></script>
 <script src="src/inpaintScheduler.js"></script>
+<script src="src/flux.js"></script>
 <script src="src/app.js"></script>
 </body>
 </html>

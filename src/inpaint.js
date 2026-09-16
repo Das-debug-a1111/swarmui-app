@@ -289,9 +289,10 @@ const Inpaint = (() => {
 
   function loraOptions() {
     return '<option value="">— Select LoRA —</option>' +
-      _forgeLoras.map(l =>
-        `<option value="${esc(l.name)}">${esc(l.alias || l.name)}</option>`
-      ).join('');
+      _forgeLoras.map(l => {
+        const label = l.alias && l.alias !== l.name ? `${l.name} — ${l.alias}` : l.name;
+        return `<option value="${esc(l.name)}">${esc(label)}</option>`;
+      }).join('');
   }
 
   function addInpLora(name = '', weight = 0.8) {

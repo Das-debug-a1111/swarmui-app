@@ -26,18 +26,27 @@ const Comic = (() => {
     { fx: 1, fy: 1, anchorFx: 0, anchorFy: 0 },
   ];
 
+  // `S.project` always points at the active page (`S.pages[S.activePage]`) —
+  // it's reassigned on every page switch, never captured once. Every function
+  // below reads/writes `S.project.xxx` and keeps working unchanged whichever
+  // page it happens to point to.
   const S = {
     initialized: false,
     tool: 'select',
-    project: { canvasWidth: 1080, canvasHeight: 1080, background: '#ffffff', objects: [] },
+    pages: [{ id: 'pg_1', canvasWidth: 1080, canvasHeight: 1080, background: '#ffffff', objects: [] }],
+    activePage: 0,
+    project: null,
     selectedId: null,
-    undoStack: [],
-    redoStack: [],
+    histories: {}, // pageId -> { undo: [], redo: [] } — undo/redo is per-page
+    autoPack: { queue: [], gallery: [], dispositions: [], selectedIndex: null }, // queue = ordered images to pack; gallery = browsable folder contents; dispositions = comparable auto-pack candidates
     _nextId: 1,
+    _nextPageId: 2,
   };
+  S.project = S.pages[S.activePage];
   let dragState = null;
 
   function genId() { return 'obj_' + (S._nextId++) + '_' + Math.random().toString(36).slice(2, 6); }
+  function genPageId() { return 'pg_' + (S._nextPageId++); }
   function findObject(id) { return S.project.objects.find(o => o.id === id); }
   function rotDeg(o) { return (o.rotation || 0) * Math.PI / 180; }
 
@@ -113,10 +122,19 @@ const Comic = (() => {
       objects:      S.project.objects.map(({ _img, ...rest }) => rest),
     });
   }
+  // Undo/redo is per-page: switching pages must not shift the history of the
+  // page you're leaving, and it keeps each snapshot stack (which can embed
+  // full base64 panel images) scoped to the page it belongs to.
+  function currentHistory() {
+    const pid = S.pages[S.activePage].id;
+    if (!S.histories[pid]) S.histories[pid] = { undo: [], redo: [] };
+    return S.histories[pid];
+  }
   function pushUndo() {
-    S.undoStack.push(projectSnapshotJSON());
-    if (S.undoStack.length > 50) S.undoStack.shift();
-    S.redoStack = [];
+    const h = currentHistory();
+    h.undo.push(projectSnapshotJSON());
+    if (h.undo.length > 50) h.undo.shift();
+    h.redo = [];
   }
   function restoreFromSnapshot(json) {
     const d = JSON.parse(json);
@@ -128,26 +146,33 @@ const Comic = (() => {
     preloadImages();
     resizeCanvasElement();
     render();
+    refreshSidePanels();
   }
   function undo() {
-    if (!S.undoStack.length) return;
-    S.redoStack.push(projectSnapshotJSON());
-    restoreFromSnapshot(S.undoStack.pop());
+    const h = currentHistory();
+    if (!h.undo.length) return;
+    h.redo.push(projectSnapshotJSON());
+    restoreFromSnapshot(h.undo.pop());
   }
   function redo() {
-    if (!S.redoStack.length) return;
-    S.undoStack.push(projectSnapshotJSON());
-    restoreFromSnapshot(S.redoStack.pop());
+    const h = currentHistory();
+    if (!h.redo.length) return;
+    h.undo.push(projectSnapshotJSON());
+    restoreFromSnapshot(h.redo.pop());
   }
 
+  // Preloads panel images across ALL pages (not just the active one), so page
+  // thumbnails render correctly even for pages the user hasn't switched to yet.
   function preloadImages() {
-    S.project.objects.forEach(obj => {
-      if (obj.type === 'panel' && obj.imageDataUrl && !obj._img) {
-        const img = new Image();
-        img.onload = () => render();
-        img.src = obj.imageDataUrl;
-        obj._img = img;
-      }
+    S.pages.forEach(page => {
+      page.objects.forEach(obj => {
+        if (obj.type === 'panel' && obj.imageDataUrl && !obj._img) {
+          const img = new Image();
+          img.onload = () => { render(); refreshSidePanels(); };
+          img.src = obj.imageDataUrl;
+          obj._img = img;
+        }
+      });
     });
   }
 
@@ -299,6 +324,7 @@ const Comic = (() => {
     S.selectedId = null;
     resizeCanvasElement();
     render();
+    refreshSidePanels();
   }
 
   function applyLayout(layoutId) {
@@ -311,24 +337,31 @@ const Comic = (() => {
     S.project.objects = [...panels, ...nonPanels];
     S.selectedId = null;
     render();
+    refreshSidePanels();
   }
 
   // ── Rendering ─────────────────────────────────────────────────────────────
-  function render() {
-    const canvas = q('comic-canvas');
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = S.project.background || '#ffffff';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+  // With no args, renders the active page onto the main on-screen canvas
+  // (plus selection handles). Pass an offscreen ctx + an explicit page object
+  // to render any other page (thumbnails, full-res export) without touching
+  // the main canvas or its selection state.
+  function render(ctx, project) {
+    const isMain = !ctx;
+    project = project || S.project;
+    if (isMain) ctx = q('comic-canvas').getContext('2d');
+    ctx.clearRect(0, 0, project.canvasWidth, project.canvasHeight);
+    ctx.fillStyle = project.background || '#ffffff';
+    ctx.fillRect(0, 0, project.canvasWidth, project.canvasHeight);
 
-    for (const obj of S.project.objects) {
+    for (const obj of project.objects) {
       if (obj.type === 'panel')  drawPanel(ctx, obj);
       else if (obj.type === 'bubble') drawBubble(ctx, obj);
       else if (obj.type === 'sfx') drawSfx(ctx, obj);
+      else if (obj.type === 'text') drawText(ctx, obj);
       else if (obj.type === 'stroke') drawStroke(ctx, obj);
     }
 
-    if (S.selectedId) {
+    if (isMain && S.selectedId) {
       const sel = findObject(S.selectedId);
       if (sel && sel.type !== 'stroke') drawSelectionHandles(ctx, sel);
     }
@@ -595,14 +628,13 @@ const Comic = (() => {
     ctx.closePath();
   }
 
-  function drawBubbleText(ctx, obj) {
-    if (!obj.text) return;
-    ctx.fillStyle = obj.textColor || '#000';
-    ctx.font = `${obj.fontSize || 24}px ${obj.font || 'Arial'}`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    const maxWidth = obj.w * 0.78;
-    const words = obj.text.split(/\s+/);
+  // ── Rich text helpers (bold/italic/underline/highlight, shared by
+  // bubble/sfx/text objects) ─────────────────────────────────────────────────
+  function fontString(obj, defaultFamily) {
+    return `${obj.italic ? 'italic ' : ''}${obj.bold ? 'bold ' : ''}${obj.fontSize || 24}px ${obj.font || defaultFamily}`;
+  }
+  function wrapText(ctx, text, maxWidth) {
+    const words = text.split(/\s+/);
     const lines = [];
     let cur = '';
     for (const word of words) {
@@ -611,9 +643,50 @@ const Comic = (() => {
       else cur = test;
     }
     if (cur) lines.push(cur);
+    return lines;
+  }
+  function drawHighlightBg(ctx, obj, lines, centerX, startY, lh, maxWidth) {
+    if (!obj.highlight) return;
+    ctx.save();
+    ctx.fillStyle = obj.fillColor || '#ffff66';
+    lines.forEach((l, i) => {
+      const y = startY + i * lh;
+      const lw = Math.min(ctx.measureText(l).width, maxWidth);
+      ctx.fillRect(centerX - lw / 2 - lh * 0.12, y - lh / 2, lw + lh * 0.24, lh);
+    });
+    ctx.restore();
+  }
+  function drawStyledLines(ctx, obj, lines, centerX, startY, lh, maxWidth) {
+    const fontSize = obj.fontSize || 24;
+    lines.forEach((l, i) => {
+      const y = startY + i * lh;
+      ctx.fillText(l, centerX, y, maxWidth);
+      if (obj.underline) {
+        const lw = Math.min(ctx.measureText(l).width, maxWidth);
+        ctx.save();
+        ctx.strokeStyle = ctx.fillStyle;
+        ctx.lineWidth = Math.max(1, fontSize * 0.06);
+        ctx.beginPath();
+        ctx.moveTo(centerX - lw / 2, y + fontSize * 0.38);
+        ctx.lineTo(centerX + lw / 2, y + fontSize * 0.38);
+        ctx.stroke();
+        ctx.restore();
+      }
+    });
+  }
+
+  function drawBubbleText(ctx, obj) {
+    if (!obj.text) return;
+    ctx.font = fontString(obj, 'Arial');
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const maxWidth = obj.w * 0.78;
+    const lines = wrapText(ctx, obj.text, maxWidth);
     const lh = (obj.fontSize || 24) * 1.25;
     const startY = obj.h / 2 - ((lines.length - 1) * lh) / 2;
-    lines.forEach((l, i) => ctx.fillText(l, obj.w / 2, startY + i * lh, maxWidth));
+    drawHighlightBg(ctx, obj, lines, obj.w / 2, startY, lh, maxWidth);
+    ctx.fillStyle = obj.textColor || '#000';
+    drawStyledLines(ctx, obj, lines, obj.w / 2, startY, lh, maxWidth);
   }
 
   function tracePathForStyle(ctx, style, w, h, obj) {
@@ -664,7 +737,7 @@ const Comic = (() => {
 
       ctx.fillStyle = obj.fillColor || '#ffffff';
       ctx.fill();
-      ctx.lineWidth = Math.max(2, Math.min(obj.w, obj.h) * 0.015);
+      ctx.lineWidth = obj.borderWidth != null ? obj.borderWidth : Math.max(2, Math.min(obj.w, obj.h) * 0.015);
       ctx.strokeStyle = obj.borderColor || '#000000';
       if (style === 'whisper') ctx.setLineDash([ctx.lineWidth * 1.5, ctx.lineWidth * 1.5]);
       ctx.stroke();
@@ -695,7 +768,9 @@ const Comic = (() => {
       }
 
       const fontSize = obj.fontSize || 48;
-      ctx.font = `bold ${fontSize}px ${obj.font || 'Impact'}`;
+      const text = obj.text || '';
+      const maxW = obj.w * 0.95;
+      ctx.font = fontString(obj, 'Impact');
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       ctx.lineJoin = 'round';
@@ -703,10 +778,38 @@ const Comic = (() => {
       if (outline > 0) {
         ctx.lineWidth = outline;
         ctx.strokeStyle = obj.outlineColor || '#000000';
-        ctx.strokeText(obj.text || '', obj.w / 2, obj.h / 2, obj.w * 0.95);
+        ctx.strokeText(text, obj.w / 2, obj.h / 2, maxW);
       }
       ctx.fillStyle = obj.textColor || '#ffffff';
-      ctx.fillText(obj.text || '', obj.w / 2, obj.h / 2, obj.w * 0.95);
+      ctx.fillText(text, obj.w / 2, obj.h / 2, maxW);
+      if (obj.underline && text) {
+        const lw = Math.min(ctx.measureText(text).width, maxW);
+        ctx.save();
+        ctx.strokeStyle = ctx.fillStyle;
+        ctx.lineWidth = Math.max(1, fontSize * 0.06);
+        ctx.beginPath();
+        ctx.moveTo(obj.w / 2 - lw / 2, obj.h / 2 + fontSize * 0.42);
+        ctx.lineTo(obj.w / 2 + lw / 2, obj.h / 2 + fontSize * 0.42);
+        ctx.stroke();
+        ctx.restore();
+      }
+    });
+  }
+
+  // ── Free text (no shape, optional highlight background) ───────────────────
+  function drawText(ctx, obj) {
+    withClipRotate(ctx, obj, ctx => {
+      if (!obj.text) return;
+      ctx.font = fontString(obj, 'Arial');
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      const maxWidth = obj.w * 0.94;
+      const lines = wrapText(ctx, obj.text, maxWidth);
+      const lh = (obj.fontSize || 28) * 1.25;
+      const startY = obj.h / 2 - ((lines.length - 1) * lh) / 2;
+      drawHighlightBg(ctx, obj, lines, obj.w / 2, startY, lh, maxWidth);
+      ctx.fillStyle = obj.textColor || '#000000';
+      drawStyledLines(ctx, obj, lines, obj.w / 2, startY, lh, maxWidth);
     });
   }
 
@@ -813,9 +916,73 @@ const Comic = (() => {
     }
   }
 
+  // ── Multi-page export (PNG zip or PDF, user's choice) ──────────────────────
+  function renderPageToDataURL(page) {
+    const canvas = document.createElement('canvas');
+    canvas.width = page.canvasWidth;
+    canvas.height = page.canvasHeight;
+    render(canvas.getContext('2d'), page);
+    return canvas.toDataURL('image/png');
+  }
+
+  async function exportAllPagesZip() {
+    const btn = q('comic-btn-export');
+    const original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '⏳ Compression…';
+    try {
+      const zip = new JSZip();
+      S.pages.forEach((page, i) => {
+        const base64 = renderPageToDataURL(page).split(',')[1];
+        zip.file(`page-${String(i + 1).padStart(2, '0')}.png`, base64, { base64: true });
+      });
+      const blob = await zip.generateAsync({ type: 'blob' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `comic-${Date.now()}.zip`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+      toast(`✅ ${S.pages.length} pages exportées`);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = original;
+    }
+  }
+
+  function exportAllPagesPDF() {
+    const orientation = p => (p.canvasWidth >= p.canvasHeight ? 'l' : 'p');
+    const first = S.pages[0];
+    const doc = new jspdf.jsPDF({ orientation: orientation(first), unit: 'px', format: [first.canvasWidth, first.canvasHeight] });
+    S.pages.forEach((page, i) => {
+      if (i > 0) doc.addPage([page.canvasWidth, page.canvasHeight], orientation(page));
+      doc.addImage(renderPageToDataURL(page), 'PNG', 0, 0, page.canvasWidth, page.canvasHeight);
+    });
+    doc.save(`comic-${Date.now()}.pdf`);
+    toast(`✅ PDF exporté (${S.pages.length} pages)`);
+  }
+
+  function exportProject() {
+    if (S.pages.length <= 1) { exportPNG(); return; }
+    if (q('comic-export-format').value === 'pdf') exportAllPagesPDF();
+    else exportAllPagesZip();
+  }
+
   // ── Save / load project ───────────────────────────────────────────────────
+  // v2 format: { version: 2, activePageIndex, pages: [{id,canvasWidth,canvasHeight,background,objects}, ...] }.
+  // v1 (legacy, single page): { version: 1, canvasWidth, canvasHeight, background, objects } — still loadable.
   function saveProject() {
-    const blob = new Blob([JSON.stringify({ version: 1, ...JSON.parse(projectSnapshotJSON()) }, null, 2)], { type: 'application/json' });
+    const data = {
+      version: 2,
+      activePageIndex: S.activePage,
+      pages: S.pages.map(p => ({
+        id: p.id,
+        canvasWidth: p.canvasWidth,
+        canvasHeight: p.canvasHeight,
+        background: p.background,
+        objects: p.objects.map(({ _img, ...rest }) => rest),
+      })),
+    };
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = `comic-project-${Date.now()}.json`;
@@ -829,19 +996,32 @@ const Comic = (() => {
     r.onload = e => {
       try {
         const d = JSON.parse(e.target.result);
-        if (!d.objects) throw new Error('Fichier invalide');
-        if (S.project.objects.length && !confirm('Remplacer le projet actuel ?')) return;
-        pushUndo();
-        S.project = {
-          canvasWidth:  d.canvasWidth  || 1080,
-          canvasHeight: d.canvasHeight || 1080,
-          background:   d.background   || '#ffffff',
-          objects:      d.objects,
-        };
-        S.selectedId = null;
+        let pages;
+        if (Array.isArray(d.pages) && d.pages.length) {
+          pages = d.pages.map(p => ({
+            id: p.id || genPageId(),
+            canvasWidth: p.canvasWidth || 1080,
+            canvasHeight: p.canvasHeight || 1080,
+            background: p.background || '#ffffff',
+            objects: p.objects || [],
+          }));
+        } else if (d.objects) {
+          pages = [{
+            id: genPageId(),
+            canvasWidth: d.canvasWidth || 1080,
+            canvasHeight: d.canvasHeight || 1080,
+            background: d.background || '#ffffff',
+            objects: d.objects,
+          }];
+        } else {
+          throw new Error('Fichier invalide');
+        }
+        if (S.pages.some(p => p.objects.length) && !confirm('Remplacer le projet actuel ?')) return;
+        S.pages = pages;
+        S.histories = {};
+        S.activePage = -1; // force switchToPage below to actually apply page 0
+        switchToPage(Math.min(d.activePageIndex || 0, pages.length - 1));
         preloadImages();
-        resizeCanvasElement();
-        render();
         toast('Projet chargé !');
       } catch (err) {
         toast('Fichier invalide: ' + err.message);
@@ -851,11 +1031,11 @@ const Comic = (() => {
   }
 
   function newProject() {
-    if (S.project.objects.length && !confirm('Nouveau projet — le projet actuel non sauvegardé sera perdu. Continuer ?')) return;
-    pushUndo();
-    S.project = { canvasWidth: S.project.canvasWidth, canvasHeight: S.project.canvasHeight, background: '#ffffff', objects: [] };
-    S.selectedId = null;
-    render();
+    if (S.pages.some(p => p.objects.length) && !confirm('Nouveau projet — le projet actuel non sauvegardé sera perdu. Continuer ?')) return;
+    S.pages = [{ id: genPageId(), canvasWidth: S.project.canvasWidth, canvasHeight: S.project.canvasHeight, background: '#ffffff', objects: [] }];
+    S.histories = {};
+    S.activePage = -1;
+    switchToPage(0);
   }
 
   function deleteSelected() {
@@ -864,6 +1044,7 @@ const Comic = (() => {
     S.project.objects = S.project.objects.filter(o => o.id !== S.selectedId);
     S.selectedId = null;
     render();
+    refreshSidePanels();
   }
 
   // ── Copy/paste (bubbles & SFX) ────────────────────────────────────────────
@@ -873,7 +1054,7 @@ const Comic = (() => {
 
   function copySelected() {
     const sel = S.selectedId && findObject(S.selectedId);
-    if (!sel || (sel.type !== 'bubble' && sel.type !== 'sfx')) return;
+    if (!sel || (sel.type !== 'bubble' && sel.type !== 'sfx' && sel.type !== 'text')) return;
     objectClipboard = JSON.parse(JSON.stringify(sel));
   }
 
@@ -888,6 +1069,7 @@ const Comic = (() => {
     S.selectedId = copy.id;
     syncBubbleControls(copy);
     render();
+    refreshSidePanels();
   }
 
   // ── Bubble text editor (floating textarea) ───────────────────────────────
@@ -910,6 +1092,7 @@ const Comic = (() => {
       bubble.text = ta.value;
       ta.remove();
       render();
+      refreshSidePanels();
     };
     ta.addEventListener('blur', commit);
     ta.addEventListener('keydown', e => {
@@ -931,27 +1114,58 @@ const Comic = (() => {
       x: (S.project.canvasWidth - w) / 2, y: (S.project.canvasHeight - h) / 2,
       w, h, rotation: 0, style,
       text: 'Texte…', font, fontSize,
-      textColor, fillColor: '#ffffff', borderColor: '#000000',
+      textColor, fillColor: '#ffffff', borderColor: '#000000', borderWidth: null,
+      bold: false, italic: false, underline: false,
       tailFx: 0.22, tailFy: 1.22,
     };
     S.project.objects.push(bubble);
     S.selectedId = bubble.id;
+    syncBubbleControls(bubble);
     render();
+    refreshSidePanels();
+  }
+
+  function addText() {
+    pushUndo();
+    const font = q('comic-bubble-font').value;
+    const textColor = q('comic-text-color').value;
+    const fontSize = +q('comic-text-size').value;
+    const w = S.project.canvasWidth * 0.4, h = S.project.canvasHeight * 0.12;
+    const text = {
+      id: genId(), type: 'text',
+      x: (S.project.canvasWidth - w) / 2, y: (S.project.canvasHeight - h) / 2,
+      w, h, rotation: 0,
+      text: 'Texte…', font, fontSize, textColor,
+      bold: false, italic: false, underline: false,
+      highlight: false, fillColor: '#ffff66',
+    };
+    S.project.objects.push(text);
+    S.selectedId = text.id;
+    syncBubbleControls(text);
+    render();
+    refreshSidePanels();
   }
 
   function syncBubbleControls(obj) {
     if (!obj) return;
+    const textLike = obj.type === 'bubble' || obj.type === 'sfx' || obj.type === 'text';
+    if (textLike) {
+      q('comic-bubble-font').value = obj.font || (obj.type === 'sfx' ? 'Impact' : 'Arial');
+      q('comic-text-color').value = obj.textColor || (obj.type === 'sfx' ? '#ffffff' : '#000000');
+      q('comic-text-size').value = Math.round(obj.fontSize || 32);
+      q('comic-text-size-val').textContent = Math.round(obj.fontSize || 32) + 'px';
+      q('comic-fill-color').value = obj.fillColor || '#ffffff';
+      q('comic-toggle-bold').classList.toggle('active', !!obj.bold);
+      q('comic-toggle-italic').classList.toggle('active', !!obj.italic);
+      q('comic-toggle-underline').classList.toggle('active', !!obj.underline);
+      q('comic-toggle-highlight').classList.toggle('active', !!obj.highlight);
+    }
     if (obj.type === 'bubble') {
-      q('comic-bubble-font').value = obj.font || 'Arial';
-      q('comic-text-color').value = obj.textColor || '#000000';
       q('comic-bubble-style').value = obj.style || 'speech';
-      q('comic-text-size').value = Math.round(obj.fontSize || 32);
-      q('comic-text-size-val').textContent = Math.round(obj.fontSize || 32) + 'px';
-    } else if (obj.type === 'sfx') {
-      q('comic-bubble-font').value = obj.font || 'Impact';
-      q('comic-text-color').value = obj.textColor || '#ffffff';
-      q('comic-text-size').value = Math.round(obj.fontSize || 32);
-      q('comic-text-size-val').textContent = Math.round(obj.fontSize || 32) + 'px';
+      q('comic-border-color').value = obj.borderColor || '#000000';
+      const bw = obj.borderWidth != null ? obj.borderWidth : 0;
+      q('comic-border-width').value = bw;
+      q('comic-border-width-val').textContent = bw + 'px';
     }
   }
 
@@ -970,10 +1184,13 @@ const Comic = (() => {
       text, font, fontSize,
       textColor, outlineColor: '#000000', outlineWidth: null,
       background, fillColor: '#ffeb3b',
+      bold: true, italic: false, underline: false,
     };
     S.project.objects.push(sfx);
     S.selectedId = sfx.id;
+    syncBubbleControls(sfx);
     render();
+    refreshSidePanels();
   }
 
   // ── Tool / keyboard ───────────────────────────────────────────────────────
@@ -1021,6 +1238,7 @@ const Comic = (() => {
         S.project.objects.push(stroke);
         dragState = { mode: 'draw', stroke };
         render();
+        refreshSidePanels();
         return;
       }
 
@@ -1091,6 +1309,7 @@ const Comic = (() => {
         S.selectedId = null;
       }
       render();
+      refreshSidePanels();
     });
 
     canvas.addEventListener('mousemove', e => {
@@ -1148,7 +1367,7 @@ const Comic = (() => {
       render();
     });
 
-    canvas.addEventListener('mouseup',    () => { dragState = null; });
+    canvas.addEventListener('mouseup',    () => { dragState = null; refreshSidePanels(); });
     canvas.addEventListener('mouseleave', () => { dragState = null; });
 
     canvas.addEventListener('dblclick', e => {
@@ -1158,7 +1377,7 @@ const Comic = (() => {
         if (o.type === 'stroke') continue;
         if (hitTestObject(o, pos.x, pos.y)) {
           if (o.type === 'panel') { S._pendingImagePanelId = o.id; q('comic-file-image').click(); }
-          else if (o.type === 'bubble' || o.type === 'sfx') { openBubbleEditor(o); }
+          else if (o.type === 'bubble' || o.type === 'sfx' || o.type === 'text') { openBubbleEditor(o); }
           break;
         }
       }
@@ -1203,6 +1422,7 @@ const Comic = (() => {
     pushUndo();
     S.project.objects = S.project.objects.filter(o => o.type !== 'stroke');
     render();
+    refreshSidePanels();
   }
 
   // ── Vertex tool ───────────────────────────────────────────────────────────
@@ -1234,9 +1454,512 @@ const Comic = (() => {
     if (!panel) { toast('Tous les panels sont déjà remplis'); return; }
     fetch(url).then(r => r.blob()).then(blob => {
       const r = new FileReader();
-      r.onload = ev => { pushUndo(); panel.imageDataUrl = ev.target.result; delete panel._img; preloadImages(); };
+      r.onload = ev => { pushUndo(); panel.imageDataUrl = ev.target.result; delete panel._img; preloadImages(); refreshSidePanels(); };
       r.readAsDataURL(blob);
     });
+  }
+
+  // ── Side panels (layers + page thumbnails) ────────────────────────────────
+  function refreshSidePanels() {
+    renderLayersPanel();
+    renderPageStrip();
+  }
+
+  // ── Pages (multi-page projects, each page free to have its own size) ─────
+  function switchToPage(i) {
+    if (i < 0 || i >= S.pages.length || i === S.activePage) return;
+    S.activePage = i;
+    S.project = S.pages[i];
+    S.selectedId = null;
+    resizeCanvasElement();
+    render();
+    refreshSidePanels();
+  }
+
+  function addPage() {
+    const page = {
+      id: genPageId(),
+      canvasWidth: S.project.canvasWidth,
+      canvasHeight: S.project.canvasHeight,
+      background: '#ffffff',
+      objects: [],
+    };
+    S.pages.push(page);
+    switchToPage(S.pages.length - 1);
+  }
+
+  function deletePage(id) {
+    if (S.pages.length <= 1) { toast('Impossible de supprimer la dernière page'); return; }
+    const i = S.pages.findIndex(p => p.id === id);
+    if (i < 0) return;
+    if (S.pages[i].objects.length && !confirm('Supprimer cette page et son contenu ?')) return;
+    delete S.histories[id];
+    S.pages.splice(i, 1);
+    const nextActive = Math.min(S.activePage, S.pages.length - 1);
+    S.activePage = -1; // ensures switchToPage runs even if the numeric index is unchanged
+    switchToPage(nextActive);
+  }
+
+  function reorderPage(draggedId, targetId) {
+    const activeId = S.pages[S.activePage].id;
+    const from = S.pages.findIndex(p => p.id === draggedId);
+    if (from < 0) return;
+    const [moved] = S.pages.splice(from, 1);
+    const to = S.pages.findIndex(p => p.id === targetId);
+    S.pages.splice(to < 0 ? S.pages.length : to, 0, moved);
+    S.activePage = S.pages.findIndex(p => p.id === activeId);
+    renderPageStrip();
+  }
+
+  function renderPageStrip() {
+    const strip = q('comic-pages-strip');
+    if (!strip) return;
+    q('comic-export-format').style.display = S.pages.length > 1 ? '' : 'none';
+    strip.innerHTML = '';
+    const THUMB_MAX = 90; // fit-to-box on BOTH dimensions — a very tall/narrow
+    // page must never blow out the strip's height (that's the bug being fixed).
+    S.pages.forEach((page, i) => {
+      const item = document.createElement('div');
+      item.className = 'comic-page-thumb' + (i === S.activePage ? ' active' : '');
+      item.draggable = true;
+      const scale = Math.min(THUMB_MAX / page.canvasWidth, THUMB_MAX / page.canvasHeight);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(page.canvasWidth * scale));
+      canvas.height = Math.max(1, Math.round(page.canvasHeight * scale));
+      const tctx = canvas.getContext('2d');
+      tctx.scale(scale, scale);
+      render(tctx, page);
+      const label = document.createElement('div');
+      label.className = 'comic-page-thumb-label';
+      label.textContent = String(i + 1);
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'comic-page-thumb-del';
+      del.title = 'Supprimer la page';
+      del.textContent = '✕';
+      del.addEventListener('click', e => { e.stopPropagation(); deletePage(page.id); });
+      item.append(canvas, label, del);
+      item.addEventListener('click', () => switchToPage(i));
+      item.addEventListener('dragstart', e => {
+        item.classList.add('dragging');
+        e.dataTransfer.setData('text/plain', page.id);
+        e.dataTransfer.effectAllowed = 'move';
+      });
+      item.addEventListener('dragend', () => item.classList.remove('dragging'));
+      item.addEventListener('dragover', e => e.preventDefault());
+      item.addEventListener('drop', e => {
+        e.preventDefault();
+        const draggedId = e.dataTransfer.getData('text/plain');
+        if (draggedId && draggedId !== page.id) reorderPage(draggedId, page.id);
+      });
+      strip.appendChild(item);
+    });
+  }
+
+  // ── Layers panel (z-order) ────────────────────────────────────────────────
+  const LAYER_ICON = { panel: '🖼', bubble: '💬', sfx: '💥', text: '🔤', stroke: '✏' };
+
+  function layerLabel(obj) {
+    if (obj.type === 'panel') return obj.imageDataUrl ? 'Panel (image)' : 'Panel (vide)';
+    if (obj.type === 'stroke') return 'Dessin libre';
+    const t = (obj.text || '').trim();
+    return t || (obj.type === 'sfx' ? 'SFX' : 'Texte');
+  }
+
+  // Panel lists topmost-first (reverse of the draw-order array) to match the
+  // usual "top of the layer list = on top" mental model.
+  function renderLayersPanel() {
+    const list = q('comic-layers-list');
+    if (!list) return;
+    list.innerHTML = '';
+    for (let i = S.project.objects.length - 1; i >= 0; i--) {
+      const obj = S.project.objects[i];
+      const row = document.createElement('div');
+      row.className = 'comic-layer-row' + (obj.id === S.selectedId ? ' active' : '');
+      row.draggable = true;
+      row.innerHTML = `
+        <span class="comic-layer-icon">${LAYER_ICON[obj.type] || '•'}</span>
+        <span class="comic-layer-label">${esc(layerLabel(obj))}</span>
+        <button type="button" class="comic-layer-btn" data-act="up" title="Monter">▲</button>
+        <button type="button" class="comic-layer-btn" data-act="down" title="Descendre">▼</button>`;
+      row.addEventListener('click', e => {
+        if (e.target.closest('.comic-layer-btn') || obj.type === 'stroke') return;
+        S.selectedId = obj.id;
+        syncBubbleControls(obj);
+        render();
+        refreshSidePanels();
+      });
+      row.querySelector('[data-act="up"]').addEventListener('click', () => moveLayer(obj.id, 1));
+      row.querySelector('[data-act="down"]').addEventListener('click', () => moveLayer(obj.id, -1));
+      row.addEventListener('dragstart', e => {
+        row.classList.add('dragging');
+        e.dataTransfer.setData('text/plain', obj.id);
+        e.dataTransfer.effectAllowed = 'move';
+      });
+      row.addEventListener('dragend', () => row.classList.remove('dragging'));
+      row.addEventListener('dragover', e => e.preventDefault());
+      row.addEventListener('drop', e => {
+        e.preventDefault();
+        const draggedId = e.dataTransfer.getData('text/plain');
+        if (draggedId && draggedId !== obj.id) reorderLayer(draggedId, obj.id);
+      });
+      list.appendChild(row);
+    }
+  }
+
+  // dir=+1 moves a layer up (later in the array, drawn on top); -1 moves it down.
+  function moveLayer(id, dir) {
+    const objs = S.project.objects;
+    const i = objs.findIndex(o => o.id === id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= objs.length) return;
+    pushUndo();
+    [objs[i], objs[j]] = [objs[j], objs[i]];
+    render();
+    refreshSidePanels();
+  }
+
+  // Drops draggedId's object into targetId's current slot (targetId shifts down).
+  function reorderLayer(draggedId, targetId) {
+    const objs = S.project.objects;
+    const from = objs.findIndex(o => o.id === draggedId);
+    if (from < 0) return;
+    pushUndo();
+    const [moved] = objs.splice(from, 1);
+    const to = objs.findIndex(o => o.id === targetId);
+    objs.splice(to < 0 ? objs.length : to, 0, moved);
+    render();
+    refreshSidePanels();
+  }
+
+  // ── Auto-pack (justified row-packing, ratios preserved, ported from the
+  // user's comic_board.py) ──────────────────────────────────────────────────
+  function loadAutoPackImage(file) {
+    return new Promise(resolve => {
+      const reader = new FileReader();
+      reader.onload = e => {
+        const img = new Image();
+        img.onload = () => {
+          // Keep the already-decoded `img` around: buildAutoPackPages sets it
+          // straight onto generated panels as `_img`, so both the live
+          // preview and the real generate step draw instantly, no extra
+          // decode / no waiting on preloadImages().
+          resolve({ id: genId(), name: file.name, dataUrl: e.target.result, w: img.naturalWidth, h: img.naturalHeight, img });
+        };
+        img.src = e.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // Batched via Promise.all (mirrors inpaintScheduler.js's addFiles) so a
+  // multi-file import triggers one re-render, not one per file.
+  const GALLERY_DND_TYPE = 'application/x-comic-ap-gallery-id';
+
+  function addAutoPackFiles(fileList) {
+    const files = [...fileList].filter(f => f.type.startsWith('image/'));
+    if (!files.length) return;
+    Promise.all(files.map(loadAutoPackImage)).then(items => {
+      S.autoPack.queue.push(...items);
+      renderAutoPackQueue();
+    });
+  }
+
+  // "Ouvrir un dossier" replaces the browsable gallery with that folder's
+  // images — it does NOT add them to the queue directly. The user picks
+  // individual images from the gallery (drag or click) into the queue,
+  // choosing exactly which ones and in what order.
+  function loadFolderGallery(fileList) {
+    const files = [...fileList].filter(f => f.type.startsWith('image/'));
+    if (!files.length) return;
+    Promise.all(files.map(loadAutoPackImage)).then(items => {
+      S.autoPack.gallery = items;
+      renderAutoPackGallery();
+    });
+  }
+
+  function addGalleryItemToQueue(galleryId) {
+    const src = S.autoPack.gallery.find(x => x.id === galleryId);
+    if (!src) return;
+    S.autoPack.queue.push({ id: genId(), name: src.name, dataUrl: src.dataUrl, w: src.w, h: src.h, img: src.img });
+    renderAutoPackQueue();
+  }
+
+  function removeAutoPackItem(id) {
+    S.autoPack.queue = S.autoPack.queue.filter(x => x.id !== id);
+    renderAutoPackQueue();
+  }
+
+  function clearAutoPackQueue() {
+    S.autoPack.queue = [];
+    renderAutoPackQueue();
+  }
+
+  function reorderAutoPackItem(draggedId, targetId) {
+    const queue = S.autoPack.queue;
+    const from = queue.findIndex(x => x.id === draggedId);
+    if (from < 0) return;
+    const [moved] = queue.splice(from, 1);
+    const to = queue.findIndex(x => x.id === targetId);
+    queue.splice(to < 0 ? queue.length : to, 0, moved);
+    renderAutoPackQueue();
+  }
+
+  function renderAutoPackGallery() {
+    const list = q('comic-ap-gallery');
+    if (!list) return;
+    list.innerHTML = '';
+    if (!S.autoPack.gallery.length) {
+      const empty = document.createElement('div');
+      empty.className = 'comic-ap-empty';
+      empty.textContent = 'Ouvre un dossier pour voir ses images ici.';
+      list.appendChild(empty);
+      return;
+    }
+    S.autoPack.gallery.forEach(item => {
+      const el = document.createElement('div');
+      el.className = 'comic-ap-gallery-item';
+      el.draggable = true;
+      el.title = item.name;
+      el.innerHTML = `<img src="${item.dataUrl}" alt="">`;
+      el.addEventListener('click', () => addGalleryItemToQueue(item.id));
+      el.addEventListener('dragstart', e => {
+        e.dataTransfer.setData(GALLERY_DND_TYPE, item.id);
+        e.dataTransfer.effectAllowed = 'copy';
+      });
+      list.appendChild(el);
+    });
+  }
+
+  function renderAutoPackQueue() {
+    const list = q('comic-ap-queue');
+    if (!list) return;
+    list.innerHTML = '';
+    if (!S.autoPack.queue.length) {
+      const empty = document.createElement('div');
+      empty.className = 'comic-ap-empty';
+      empty.textContent = 'Aucune image dans la file — glisse-en depuis la galerie ci-dessus, ou ajoute des fichiers directement.';
+      list.appendChild(empty);
+      updateAutoPackDispositions();
+      return;
+    }
+    S.autoPack.queue.forEach((item, i) => {
+      const el = document.createElement('div');
+      el.className = 'comic-ap-item';
+      el.draggable = true;
+      el.innerHTML = `
+        <img src="${item.dataUrl}" alt="">
+        <span class="comic-ap-item-order">${i + 1}</span>
+        <button type="button" class="comic-ap-item-del" title="Retirer">✕</button>`;
+      el.querySelector('.comic-ap-item-del').addEventListener('click', () => removeAutoPackItem(item.id));
+      el.addEventListener('dragstart', e => {
+        el.classList.add('dragging');
+        e.dataTransfer.setData('text/plain', item.id);
+        e.dataTransfer.effectAllowed = 'move';
+      });
+      el.addEventListener('dragend', () => el.classList.remove('dragging'));
+      el.addEventListener('dragover', e => e.preventDefault());
+      el.addEventListener('drop', e => {
+        e.preventDefault();
+        const draggedId = e.dataTransfer.getData('text/plain');
+        if (draggedId && draggedId !== item.id) reorderAutoPackItem(draggedId, item.id);
+      });
+      list.appendChild(el);
+    });
+    updateAutoPackDispositions();
+  }
+
+  // Greedy bucketing by reference width at an internal target row height —
+  // just decides which images share a row. The real row height (and thus the
+  // exact scale of every image in it) is only fixed by layoutRowJustified,
+  // which always produces edge-to-edge rows with each image uniformly
+  // scaled — never cropped, never deformed, ratio always exact.
+  function packImagesIntoRows(items, innerWidth, gutter, rowHeightTarget) {
+    rowHeightTarget = Math.max(80, rowHeightTarget || innerWidth * 0.3);
+    const rows = [];
+    let current = [];
+    let curW = 0;
+    for (const item of items) {
+      const refW = Math.max(1, Math.round(item.w * (rowHeightTarget / item.h)));
+      const add = refW + (current.length ? gutter : 0);
+      if (current.length && curW + add > innerWidth) {
+        rows.push(current);
+        current = [item];
+        curW = refW;
+      } else {
+        current.push(item);
+        curW += add;
+      }
+    }
+    if (current.length) rows.push(current);
+    return rows;
+  }
+
+  function layoutRowJustified(row, innerWidth, gutter) {
+    const avail = innerWidth - gutter * (row.length - 1);
+    const sumRatio = row.reduce((s, it) => s + it.w / it.h, 0);
+    const rowH = sumRatio > 0 ? Math.max(1, Math.round(avail / sumRatio)) : 100;
+    let x = 0;
+    const placements = row.map(item => {
+      const w = Math.max(1, Math.round(item.w * (rowH / item.h)));
+      const p = { item, x, w, h: rowH };
+      x += w + gutter;
+      return p;
+    });
+    return { placements, rowHeight: rowH };
+  }
+
+  // Packs the whole queue into justified rows, then groups those rows into
+  // one or more brand-new pages (existing pages are never touched/resized).
+  // Each generated page's height always fits its own content exactly — when
+  // paginating, maxHeight is only the threshold that decides where to start
+  // the next page, never a fixed height with leftover empty space.
+  function buildAutoPackPages(queue, { width, gutter, margin, bg, paginate, maxHeight, rowHeightTarget }) {
+    const innerWidth = width - 2 * margin;
+    const rows = packImagesIntoRows(queue, innerWidth, gutter, rowHeightTarget)
+      .map(row => layoutRowJustified(row, innerWidth, gutter));
+
+    const pageRowGroups = [];
+    let current = [];
+    let curH = 2 * margin;
+    for (const row of rows) {
+      const add = row.rowHeight + (current.length ? gutter : 0);
+      if (paginate && current.length && curH + add > maxHeight) {
+        pageRowGroups.push(current);
+        current = [row];
+        curH = 2 * margin + row.rowHeight;
+      } else {
+        current.push(row);
+        curH += add;
+      }
+    }
+    if (current.length) pageRowGroups.push(current);
+
+    return pageRowGroups.map(group => {
+      const contentH = group.reduce((s, r) => s + r.rowHeight, 0) + gutter * (group.length - 1);
+      const objects = [];
+      let y = margin;
+      for (const row of group) {
+        for (const p of row.placements) {
+          objects.push({
+            id: genId(), type: 'panel',
+            x: margin + p.x, y, w: p.w, h: p.h, rotation: 0,
+            vertices: [{ fx: 0, fy: 0 }, { fx: 1, fy: 0 }, { fx: 1, fy: 1 }, { fx: 0, fy: 1 }],
+            imageDataUrl: p.item.dataUrl, fit: 'contain', imgOffsetX: 0, imgOffsetY: 0, imgZoom: 1,
+            borderWidth: null, borderColor: null,
+            _img: p.item.img, // already-decoded — draws instantly, no preloadImages() round-trip needed
+          });
+        }
+        y += row.rowHeight + gutter;
+      }
+      return { id: genPageId(), canvasWidth: width, canvasHeight: contentH + 2 * margin, background: bg, objects };
+    });
+  }
+
+  function readAutoPackOptions() {
+    return {
+      width:     Math.max(200, +q('comic-ap-width').value || S.project.canvasWidth),
+      gutter:    Math.max(0, +q('comic-ap-gutter').value || 0),
+      margin:    Math.max(0, +q('comic-ap-margin').value || 0),
+      bg:        q('comic-ap-bg').value,
+      paginate:  q('comic-ap-paginate').checked,
+      maxHeight: Math.max(200, +q('comic-ap-maxheight').value || 2000),
+    };
+  }
+
+  // Same justified-row math, 3 different bucketing targets — genuinely
+  // different row groupings (fewer/more images per row) to compare and pick
+  // from, not just one fixed automatic result.
+  const AUTOPACK_DISPOSITIONS = [
+    { label: 'Compact', hint: 'plus d’images par rangée', factor: 0.18 },
+    { label: 'Équilibré', hint: 'par défaut', factor: 0.30 },
+    { label: 'Large', hint: 'moins d’images par rangée, plus grandes', factor: 0.48 },
+  ];
+
+  function renderPageThumbInto(container, page, maxSize) {
+    const scale = Math.min(maxSize / page.canvasWidth, maxSize / page.canvasHeight);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(page.canvasWidth * scale));
+    canvas.height = Math.max(1, Math.round(page.canvasHeight * scale));
+    const ctx = canvas.getContext('2d');
+    ctx.scale(scale, scale);
+    render(ctx, page);
+    container.appendChild(canvas);
+  }
+
+  // Computes all 3 dispositions (cached on S.autoPack.dispositions) and
+  // renders them as clickable cards — reuses buildAutoPackPages (pure, no
+  // side effects) so what you see is exactly what "Générer" will produce.
+  function updateAutoPackDispositions() {
+    const list = q('comic-ap-dispositions');
+    if (!list) return;
+    list.innerHTML = '';
+    if (!S.autoPack.queue.length) {
+      S.autoPack.dispositions = [];
+      const empty = document.createElement('div');
+      empty.className = 'comic-ap-empty';
+      empty.textContent = 'Ajoute des images à la file pour comparer des dispositions.';
+      list.appendChild(empty);
+      return;
+    }
+    const baseOpts = readAutoPackOptions();
+    const innerWidth = baseOpts.width - 2 * baseOpts.margin;
+    S.autoPack.dispositions = AUTOPACK_DISPOSITIONS.map(def => ({
+      def,
+      pages: buildAutoPackPages(S.autoPack.queue, { ...baseOpts, rowHeightTarget: innerWidth * def.factor }),
+    }));
+    if (S.autoPack.selectedIndex == null || S.autoPack.selectedIndex >= S.autoPack.dispositions.length) {
+      S.autoPack.selectedIndex = 1; // Équilibré by default
+    }
+    S.autoPack.dispositions.forEach((d, i) => {
+      const card = document.createElement('div');
+      card.className = 'comic-ap-disposition-card' + (i === S.autoPack.selectedIndex ? ' selected' : '');
+      const title = document.createElement('div');
+      title.className = 'comic-ap-disposition-title';
+      title.textContent = `${d.def.label} — ${d.pages.length} page${d.pages.length > 1 ? 's' : ''}`;
+      const hint = document.createElement('div');
+      hint.className = 'field-hint';
+      hint.textContent = d.def.hint;
+      const pagesRow = document.createElement('div');
+      pagesRow.className = 'comic-ap-disposition-pages';
+      d.pages.slice(0, 4).forEach(page => renderPageThumbInto(pagesRow, page, 90));
+      if (d.pages.length > 4) {
+        const more = document.createElement('div');
+        more.className = 'comic-ap-disposition-more';
+        more.textContent = `+${d.pages.length - 4}`;
+        pagesRow.appendChild(more);
+      }
+      card.append(title, hint, pagesRow);
+      card.addEventListener('click', () => {
+        S.autoPack.selectedIndex = i;
+        list.querySelectorAll('.comic-ap-disposition-card').forEach((c, ci) => c.classList.toggle('selected', ci === i));
+      });
+      list.appendChild(card);
+    });
+  }
+
+  function openAutoPackModal() {
+    q('comic-ap-width').value = S.project.canvasWidth;
+    q('comic-ap-maxheight').value = S.project.canvasHeight;
+    q('comic-autopack-overlay').classList.add('open');
+    updateAutoPackDispositions();
+  }
+
+  function closeAutoPackModal() {
+    q('comic-autopack-overlay').classList.remove('open');
+  }
+
+  function generateAutoPack() {
+    if (!S.autoPack.queue.length) { toast('Ajoute au moins une image'); return; }
+    const chosen = S.autoPack.dispositions[S.autoPack.selectedIndex];
+    const newPages = chosen ? chosen.pages : buildAutoPackPages(S.autoPack.queue, readAutoPackOptions());
+    S.pages.push(...newPages);
+    preloadImages();
+    S.activePage = -1; // force switchToPage to actually apply even if the index is unchanged
+    switchToPage(S.pages.length - newPages.length);
+    clearAutoPackQueue();
+    closeAutoPackModal();
+    toast(`✅ ${newPages.length} page${newPages.length > 1 ? 's' : ''} générée${newPages.length > 1 ? 's' : ''}`);
   }
 
   // ── Init ──────────────────────────────────────────────────────────────────
@@ -1268,25 +1991,62 @@ const Comic = (() => {
     });
     q('comic-bubble-font').addEventListener('change', function () {
       const sel = S.selectedId && findObject(S.selectedId);
-      if (sel && (sel.type === 'bubble' || sel.type === 'sfx')) { sel.font = this.value; render(); }
+      if (sel && (sel.type === 'bubble' || sel.type === 'sfx' || sel.type === 'text')) { sel.font = this.value; render(); }
     });
     q('comic-text-color').addEventListener('input', function () {
       const sel = S.selectedId && findObject(S.selectedId);
-      if (sel && (sel.type === 'bubble' || sel.type === 'sfx')) { sel.textColor = this.value; render(); }
+      if (sel && (sel.type === 'bubble' || sel.type === 'sfx' || sel.type === 'text')) { sel.textColor = this.value; render(); }
     });
     q('comic-text-size').addEventListener('input', function () {
       q('comic-text-size-val').textContent = this.value + 'px';
       const sel = S.selectedId && findObject(S.selectedId);
-      if (sel && (sel.type === 'bubble' || sel.type === 'sfx')) { sel.fontSize = +this.value; render(); }
+      if (sel && (sel.type === 'bubble' || sel.type === 'sfx' || sel.type === 'text')) { sel.fontSize = +this.value; render(); }
     });
+    q('comic-fill-color').addEventListener('input', function () {
+      const sel = S.selectedId && findObject(S.selectedId);
+      if (sel && (sel.type === 'bubble' || sel.type === 'sfx' || sel.type === 'text')) { sel.fillColor = this.value; render(); }
+    });
+    q('comic-toggle-bold').addEventListener('click', function () {
+      const sel = S.selectedId && findObject(S.selectedId);
+      if (!sel || (sel.type !== 'bubble' && sel.type !== 'sfx' && sel.type !== 'text')) return;
+      pushUndo();
+      sel.bold = !sel.bold;
+      this.classList.toggle('active', sel.bold);
+      render();
+    });
+    q('comic-toggle-italic').addEventListener('click', function () {
+      const sel = S.selectedId && findObject(S.selectedId);
+      if (!sel || (sel.type !== 'bubble' && sel.type !== 'sfx' && sel.type !== 'text')) return;
+      pushUndo();
+      sel.italic = !sel.italic;
+      this.classList.toggle('active', sel.italic);
+      render();
+    });
+    q('comic-toggle-underline').addEventListener('click', function () {
+      const sel = S.selectedId && findObject(S.selectedId);
+      if (!sel || (sel.type !== 'bubble' && sel.type !== 'sfx' && sel.type !== 'text')) return;
+      pushUndo();
+      sel.underline = !sel.underline;
+      this.classList.toggle('active', sel.underline);
+      render();
+    });
+    q('comic-toggle-highlight').addEventListener('click', function () {
+      const sel = S.selectedId && findObject(S.selectedId);
+      if (!sel || sel.type !== 'text') return;
+      pushUndo();
+      sel.highlight = !sel.highlight;
+      this.classList.toggle('active', sel.highlight);
+      render();
+    });
+    q('comic-add-text').addEventListener('click', addText);
     q('comic-border-width').addEventListener('input', function () {
       q('comic-border-width-val').textContent = this.value + 'px';
       const sel = S.selectedId && findObject(S.selectedId);
-      if (sel && sel.type === 'panel') { sel.borderWidth = +this.value; render(); }
+      if (sel && (sel.type === 'panel' || sel.type === 'bubble')) { sel.borderWidth = +this.value; render(); }
     });
     q('comic-border-color').addEventListener('input', function () {
       const sel = S.selectedId && findObject(S.selectedId);
-      if (sel && sel.type === 'panel') { sel.borderColor = this.value; render(); }
+      if (sel && (sel.type === 'panel' || sel.type === 'bubble')) { sel.borderColor = this.value; render(); }
     });
     q('comic-zoom-in').addEventListener('click', () => setViewZoom((S.viewZoom || 1) + 0.1));
     q('comic-zoom-out').addEventListener('click', () => setViewZoom(Math.max(0.1, (S.viewZoom || 1) - 0.1)));
@@ -1296,6 +2056,32 @@ const Comic = (() => {
     q('comic-obj-paste').addEventListener('click', pasteClipboard);
     q('comic-btn-undo').addEventListener('click', undo);
     q('comic-btn-redo').addEventListener('click', redo);
+    q('comic-add-page').addEventListener('click', addPage);
+    q('comic-btn-autopack').addEventListener('click', openAutoPackModal);
+    q('comic-ap-close').addEventListener('click', closeAutoPackModal);
+    q('comic-ap-cancel').addEventListener('click', closeAutoPackModal);
+    q('comic-ap-generate').addEventListener('click', generateAutoPack);
+    q('comic-ap-btn-folder').addEventListener('click', () => q('comic-ap-file-folder').click());
+    q('comic-ap-btn-files').addEventListener('click', () => q('comic-ap-file-files').click());
+    q('comic-ap-btn-clear').addEventListener('click', clearAutoPackQueue);
+    q('comic-ap-file-folder').addEventListener('change', e => { loadFolderGallery(e.target.files); e.target.value = ''; });
+    q('comic-ap-file-files').addEventListener('change', e => { addAutoPackFiles(e.target.files); e.target.value = ''; });
+    // Accepts a drag coming from the folder gallery above (adds a copy at the
+    // end of the queue) — separate from the queue's own internal reorder drag
+    // (which uses 'text/plain' and is bound per-row in renderAutoPackQueue).
+    q('comic-ap-queue').addEventListener('dragover', e => {
+      if (e.dataTransfer.types.includes(GALLERY_DND_TYPE)) e.preventDefault();
+    });
+    q('comic-ap-queue').addEventListener('drop', e => {
+      const galleryId = e.dataTransfer.getData(GALLERY_DND_TYPE);
+      if (galleryId) { e.preventDefault(); addGalleryItemToQueue(galleryId); }
+    });
+    q('comic-ap-paginate').addEventListener('change', function () {
+      q('comic-ap-maxheight').disabled = !this.checked;
+      updateAutoPackDispositions();
+    });
+    ['comic-ap-width', 'comic-ap-gutter', 'comic-ap-margin', 'comic-ap-bg', 'comic-ap-maxheight']
+      .forEach(id => q(id).addEventListener('input', updateAutoPackDispositions));
     q('comic-btn-new').addEventListener('click', newProject);
     q('comic-btn-save').addEventListener('click', saveProject);
     q('comic-btn-load').addEventListener('click', () => q('comic-file-project').click());
@@ -1304,7 +2090,7 @@ const Comic = (() => {
       e.target.value = '';
     });
     q('comic-btn-copy').addEventListener('click', copyImage);
-    q('comic-btn-export').addEventListener('click', exportPNG);
+    q('comic-btn-export').addEventListener('click', exportProject);
     q('comic-file-image').addEventListener('change', e => {
       const file = e.target.files[0];
       const panel = findObject(S._pendingImagePanelId);
@@ -1346,12 +2132,14 @@ const Comic = (() => {
     bindUI();
     resizeCanvasElement();
     render();
+    refreshSidePanels();
     loadSystemFonts();
   }
 
   function onShow() {
     resizeCanvasElement();
     render();
+    refreshSidePanels();
   }
 
   return { init, onShow, loadFromSrc };

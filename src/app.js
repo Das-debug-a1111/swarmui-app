@@ -480,7 +480,10 @@ $('btn-swap-dims').addEventListener('click', () => {
 function populateLoRASelect(sel) {
   const cur = sel.value;
   sel.innerHTML = '<option value="">— Select LoRA —</option>' +
-    App.loraModels.map(f => `<option value="${esc(f.name)}">${esc(f.title || f.name)}</option>`).join('');
+    App.loraModels.map(f => {
+      const label = f.title && f.title !== f.name ? `${f.name} — ${f.title}` : f.name;
+      return `<option value="${esc(f.name)}">${esc(label)}</option>`;
+    }).join('');
   if (cur) sel.value = cur;
 }
 
@@ -1410,16 +1413,18 @@ $('btn-preset-delete').addEventListener('click', () => {
 function switchTab(tab) {
   document.querySelectorAll('.tab').forEach(el => el.classList.toggle('active', el.dataset.tab === tab));
 
-  const isTxt  = tab === 'txt2img';
-  const isInp  = tab === 'inpaint';
-  const isSch  = tab === 'scheduler';
-  const isPng  = tab === 'pnginfo';
+  const isTxt   = tab === 'txt2img';
+  const isFlux  = tab === 'flux';
+  const isInp   = tab === 'inpaint';
+  const isSch   = tab === 'scheduler';
+  const isPng   = tab === 'pnginfo';
   const isWm    = tab === 'watermark';
   const isComic = tab === 'comic';
-  const isIps  = tab === 'inpaintsched';
-  const isMdl  = tab === 'models';
+  const isIps   = tab === 'inpaintsched';
+  const isMdl   = tab === 'models';
 
   $('view-txt2img').style.display = isTxt ? 'contents' : 'none';
+  $('view-flux').classList.toggle('active', isFlux);
   $('view-inpaint').classList.toggle('active', isInp);
   $('view-scheduler').classList.toggle('active', isSch);
   $('view-pnginfo').classList.toggle('active', isPng);
@@ -1428,6 +1433,7 @@ function switchTab(tab) {
   $('view-ips').classList.toggle('active', isIps);
   $('view-models').classList.toggle('active', isMdl);
 
+  if (isFlux)  { Flux.init(); Flux.onShow(); }
   if (isInp)   { Inpaint.init(); Inpaint.onShow(); }
   if (isSch)   { Scheduler.init(); Scheduler.onShow(); }
   if (isWm)    { Watermark.init(); }

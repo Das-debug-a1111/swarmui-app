@@ -71,6 +71,7 @@
   },
   "dependencies": {
     "electron-updater": "^6.3.0",
+    "jspdf": "^4.2.1",
     "jszip": "^3.10.1"
   },
   "devDependencies": {
