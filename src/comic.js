@@ -905,8 +905,9 @@ const Comic = (() => {
 
   function resizeCanvasElement() {
     const canvas = q('comic-canvas');
-    canvas.width = S.project.canvasWidth;
-    canvas.height = S.project.canvasHeight;
+    // Assigner width/height efface le canvas, même à valeur identique : seulement si la taille change
+    if (canvas.width !== S.project.canvasWidth) canvas.width = S.project.canvasWidth;
+    if (canvas.height !== S.project.canvasHeight) canvas.height = S.project.canvasHeight;
     let scale;
     if (S.viewZoom) {
       scale = S.viewZoom;
@@ -925,6 +926,7 @@ const Comic = (() => {
   function setViewZoom(zoom) {
     S.viewZoom = zoom;
     resizeCanvasElement();
+    render();
   }
 
   // ── Export / copy ─────────────────────────────────────────────────────────
