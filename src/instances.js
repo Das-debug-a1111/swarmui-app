@@ -121,5 +121,17 @@ function createInstanceBar(container, {
   return {
     get activeIdx() { return activeIdx; },
     get count()     { return names.length; },
+    // Ouvre une nouvelle instance (comme le bouton +) avec un nom donné ; -1 si le maximum est atteint
+    addInstance(name) {
+      if (names.length >= maxInstances) return -1;
+      onSave?.(activeIdx);
+      const newIdx = names.length;
+      names.push(name || `Instance ${newIdx + 1}`);
+      activeIdx = newIdx;
+      onNew?.(newIdx);
+      onLoad?.(newIdx);
+      render();
+      return newIdx;
+    },
   };
 }

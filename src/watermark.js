@@ -145,11 +145,15 @@ const Watermark = (() => {
       div.querySelector('.wm-thumb-remove').addEventListener('click', e => { e.stopPropagation(); removeImage(entry.id); });
       list.appendChild(div);
     });
+    list.querySelector('.wm-thumb.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     const countEl = $('wm-export-all-count');
     if (countEl) countEl.textContent = S.images.length ? `(${S.images.length})` : '';
   }
 
-  async function loadFromSrc(url) {
+  // Ajoute une image (galerie, génération de l'onglet Twitter…). select:false = l'ajoute sans changer l'aperçu,
+  // sauf si c'est la première.
+  async function loadFromSrc(url, { name, select = true } = {}) {
+    init();
     if (!url.startsWith('data:')) {
       try {
         const res  = await fetch(url);
@@ -157,10 +161,11 @@ const Watermark = (() => {
         url = await fileToDataUrl(blob);
       } catch (_) { /* fallback: use URL directly */ }
     }
-    const entry = { id: genId(), name: 'sent-' + Date.now(), dataUrl: url, override: null };
+    const entry = { id: genId(), name: name || 'image-' + Date.now(), dataUrl: url, override: null };
     S.images.push(entry);
     renderImageList();
-    selectImage(entry.id);
+    if (select || !S.activeId) selectImage(entry.id);
+    return entry;
   }
 
   // ── Logo watermark ────────────────────────────────────────────────────────
@@ -198,8 +203,13 @@ const Watermark = (() => {
       dataUrl = await fileToDataUrl(file);
     }
     S.wmB64 = dataUrl;
-    localStorage.setItem('swarm_wm_b64',  dataUrl);
-    localStorage.setItem('swarm_wm_name', file.name);
+    // A big logo can exceed localStorage's ~5 MB: keep it for this session, just don't persist it
+    try {
+      localStorage.setItem('swarm_wm_b64',  dataUrl);
+      localStorage.setItem('swarm_wm_name', file.name);
+    } catch {
+      toast('Logo trop lourd pour être mémorisé — utilisable jusqu\'à la fermeture de l\'app');
+    }
     setWmStatus(file.name);
     if (S.activeId && S.logoEnabled) showWmOverlay();
   }

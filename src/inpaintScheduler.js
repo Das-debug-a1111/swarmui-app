@@ -1,35 +1,41 @@
-// ── Inpaint Scheduler ─────────────────────────────────────────────────────────
-// Dessiner un masque + un prompt une fois et les appliquer à plusieurs images
-// importées localement, traitées séquentiellement via Forge (/sdapi/v1/img2img).
+// ── Inpaint par lot (mode « Inpaint » de l'onglet Scheduler) ──────────────────
+// Plusieurs photos importées localement, chacune avec un ou plusieurs masques (une couleur et un prompt
+// par masque), traitées séquentiellement via Forge (/sdapi/v1/img2img). Les masques d'une photo sont
+// appliqués l'un après l'autre : le résultat du masque 1 devient l'image de départ du masque 2, etc.
 const InpaintScheduler = (() => {
   const q = id => document.getElementById(id);
 
+  const MASK_COLORS = ['#ff3b3b', '#3b82ff', '#22c55e', '#f59e0b', '#a855f7', '#ec4899', '#14b8a6', '#eab308'];
+
   const S = {
-    items:              [],
-    nextId:             1,
-    templateMaskCanvas: null, // dernier masque sauvegardé — copié sur les nouvelles images
-    editingId:          null,
-    running:            false,
-    paused:             false,
-    stopReq:            false,
-    forgeOnline:        false,
-    _retryTimer:        null,
-    _abort:             null,
-    // état de l'éditeur de masque pour l'item actuellement ouvert
-    maskCanvas:         null,
-    maskCtx:            null,
-    drawing:            false,
-    lastPos:            null,
-    tool:               'brush',
-    brushSize:          40,
-    undoStack:          [],
-    initialized:        false,
+    items:       [],
+    nextId:      1,
+    nextMaskId:  1,
+    template:    null,  // masques du dernier éditeur validé — copiés sur les nouvelles photos
+    editingId:   null,
+    running:     false,
+    paused:      false,
+    stopReq:     false,
+    forgeOnline: false,
+    _retryTimer: null,
+    _abort:      null,
+    count:       Math.max(1, Math.min(16, +localStorage.getItem('ips-count') || 1)),
+    // éditeur de masques de la photo ouverte
+    editMasks:   [],    // [{ id, color, canvas, ctx, prompt, negative }] à la taille d'affichage
+    activeMask:  0,
+    drawing:     false,
+    lastPos:     null,
+    tool:        'brush',
+    brushSize:   40,
+    undoStack:   [],    // [{ maskId, data }]
+    initialized: false,
   };
 
   function esc(s) {
-    return String(s).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    return String(s ?? '').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
   function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+  const colorFor = i => MASK_COLORS[i % MASK_COLORS.length];
 
   // ── Forge connectivity ────────────────────────────────────────────────────
   function getForgeUrl() {
@@ -118,29 +124,20 @@ const InpaintScheduler = (() => {
         'Sélectionne le script de lancement de Forge',
         'Choisis webui-user.bat (ou ton propre .bat) dans le dossier Forge',
       );
-
       const cfg = await window.electronAPI.configGet();
       if (!cfg?.forgeLaunchScript) {
         const picked = await pickScript();
         if (!picked) return;
       }
-
       btn.textContent = '⏳ Démarrage…';
       let res = await window.electronAPI.launchProcess('forgeLaunchScript');
-
       if (res?.error === 'script_not_found' || res?.error === 'no_script_configured') {
         const picked = await pickScript();
         if (!picked) return;
         res = await window.electronAPI.launchProcess('forgeLaunchScript');
       }
-
-      if (res?.error) {
-        toast(`Erreur lancement Forge: ${res.error}`, 'error');
-        return;
-      }
-
-      // connectForge() retries every 10s on its own until Forge responds
-      connectForge();
+      if (res?.error) { showErrorToast(`Erreur lancement Forge : ${res.error}`); return; }
+      connectForge();   // réessaie toutes les 10 s jusqu'à ce que Forge réponde
     } finally {
       btn.disabled = false;
       btn.textContent = originalText;
@@ -154,13 +151,30 @@ const InpaintScheduler = (() => {
     q('ips-btn-stop').disabled  = !S.running;
   }
 
+  // ── Nombre d'images par photo ─────────────────────────────────────────────
+  function syncCount() {
+    const custom = ![1, 2, 4, 8].includes(S.count);
+    document.querySelectorAll('#ips-seg-count button').forEach(b => b.classList.toggle('active', +b.dataset.v === S.count));
+    q('ips-count-custom').classList.toggle('active', custom);
+    if (custom) q('ips-count-custom').value = S.count;
+    else if (document.activeElement !== q('ips-count-custom')) q('ips-count-custom').value = '';
+  }
+  function setCount(v) {
+    S.count = Math.max(1, Math.min(16, parseInt(v, 10) || 1));
+    localStorage.setItem('ips-count', S.count);
+    syncCount();
+  }
+
   // ── Presets (réglages partagés) ───────────────────────────────────────────
   const PRESET_KEY = 'swi-ips-presets';
 
   function getPresets() {
     try { return JSON.parse(localStorage.getItem(PRESET_KEY) || '{}'); } catch { return {}; }
   }
-  function savePresetsData(obj) { localStorage.setItem(PRESET_KEY, JSON.stringify(obj)); }
+  function savePresetsData(obj) {
+    try { localStorage.setItem(PRESET_KEY, JSON.stringify(obj)); return true; }
+    catch (e) { showErrorToast(`Preset non sauvegardé (stockage plein) : ${e.message}`); return false; }
+  }
 
   function collectSettings() {
     return {
@@ -176,6 +190,7 @@ const InpaintScheduler = (() => {
       pad:       q('ips-pad').value,
       prompt:    q('ips-prompt').value,
       neg:       q('ips-neg').value,
+      count:     S.count,
     };
   }
 
@@ -197,22 +212,24 @@ const InpaintScheduler = (() => {
     if (p.area) { const el = document.querySelector(`input[name="ips-area"][value="${p.area}"]`); if (el) el.checked = true; }
     if (p.prompt !== undefined) q('ips-prompt').value = p.prompt;
     if (p.neg    !== undefined) q('ips-neg').value    = p.neg;
+    if (p.count) setCount(p.count);
   }
 
   function renderPresetList() {
     const sel = q('ips-preset-sel');
     if (!sel) return;
     const presets = getPresets();
-    sel.innerHTML = '<option value="">— Select —</option>' +
+    sel.innerHTML = '<option value="">— Preset —</option>' +
       Object.keys(presets).sort().map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
   }
 
-  function savePreset() {
-    const name = q('ips-preset-name').value.trim();
+  async function savePreset() {
+    const name = q('ips-preset-name').value.trim() || q('ips-preset-sel').value;
     if (!name) return;
     const presets = getPresets();
+    if (presets[name] && !await uiConfirm({ title: `Remplacer « ${name} » ?`, okLabel: 'Remplacer' })) return;
     presets[name] = collectSettings();
-    savePresetsData(presets);
+    if (!savePresetsData(presets)) return;
     renderPresetList();
     q('ips-preset-sel').value = name;
     q('ips-preset-name').value = '';
@@ -225,82 +242,118 @@ const InpaintScheduler = (() => {
     if (p) applySettings(p);
   }
 
-  function deletePreset() {
+  async function deletePreset() {
     const name = q('ips-preset-sel').value;
-    if (!name) return;
+    if (!name || !await uiConfirm({ title: `Supprimer « ${name} » ?`, okLabel: 'Supprimer', danger: true })) return;
     const presets = getPresets();
     delete presets[name];
     savePresetsData(presets);
     renderPresetList();
   }
 
-  // ── Queue management ──────────────────────────────────────────────────────
+  // ── Masques : copies et tests ─────────────────────────────────────────────
+  function copyCanvas(src, w = src.width, h = src.height) {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    c.getContext('2d').drawImage(src, 0, 0, w, h);
+    return c;
+  }
+
+  function canvasIsEmpty(c) {
+    const d = c.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, c.width, c.height).data;
+    for (let i = 3; i < d.length; i += 4) if (d[i] > 10) return false;
+    return true;
+  }
+
+  const cloneMasks = masks => masks.map(m => ({ id: S.nextMaskId++, color: m.color, canvas: copyCanvas(m.canvas), prompt: m.prompt, negative: m.negative }));
+
+  // ── File d'images ─────────────────────────────────────────────────────────
   function statusLabel(s) {
-    return { 'no-mask': 'No mask', ready: 'Ready', running: 'Running…', done: 'Done', error: 'Error' }[s] || s;
+    return { 'no-mask': 'Sans masque', ready: 'Prête', running: 'En cours…', done: 'Terminée', error: 'Erreur' }[s] || s;
+  }
+
+  // Les cartes affichent une petite miniature JPEG plutôt que l'image complète (des dizaines d'images
+  // de plusieurs Mo dans le DOM figeaient l'onglet sur les gros lots).
+  function makeThumb(img, max = 320) {
+    const k = Math.min(1, max / Math.max(img.width, img.height));
+    const c = document.createElement('canvas');
+    c.width  = Math.max(1, Math.round(img.width  * k));
+    c.height = Math.max(1, Math.round(img.height * k));
+    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL('image/jpeg', 0.8);
   }
 
   function loadImageFile(file) {
     return new Promise(resolve => {
-      const reader = new FileReader();
-      reader.onload = e => {
-        const img = new Image();
-        img.onload = () => {
-          const item = {
-            id:         S.nextId++,
-            name:       file.name,
-            image:      img,
-            maskCanvas: null,
-            status:     'no-mask',
-            resultURL:  null,
-            errMsg:     null,
-            prompt:     q('ips-prompt')?.value || '',
-            negative:   q('ips-neg')?.value    || '',
-            areaMode:   document.querySelector('input[name="ips-area"]:checked')?.value || 'only_masked',
-            width:      img.width,
-            height:     img.height,
-          };
-          if (S.templateMaskCanvas) {
-            item.maskCanvas = document.createElement('canvas');
-            item.maskCanvas.width  = S.templateMaskCanvas.width;
-            item.maskCanvas.height = S.templateMaskCanvas.height;
-            item.maskCanvas.getContext('2d').drawImage(S.templateMaskCanvas, 0, 0);
-            item.status = 'ready';
-          }
-          resolve(item);
+      // URL d'objet plutôt que data URL : les octets restent dans le stockage du navigateur, pas en base64 dans le tas JS
+      const srcUrl = URL.createObjectURL(file);
+      const img = new Image();
+      img.onerror = () => { URL.revokeObjectURL(srcUrl); resolve(null); };
+      img.onload = () => {
+        const item = {
+          id:       S.nextId++,
+          name:     file.name,
+          image:    img,
+          srcUrl,
+          masks:    S.template ? cloneMasks(S.template) : [],
+          status:   S.template ? 'ready' : 'no-mask',
+          results:  [],   // [{ blob, url }]
+          errMsg:   null,
+          areaMode: document.querySelector('input[name="ips-area"]:checked')?.value || 'only_masked',
+          width:    img.width,
+          height:   img.height,
+          thumb:    makeThumb(img),
         };
-        img.src = e.target.result;
+        resolve(item);
       };
-      reader.readAsDataURL(file);
+      img.src = srcUrl;
     });
   }
 
-  function addFiles(fileList) {
+  function releaseResults(item) {
+    item.results.forEach(r => URL.revokeObjectURL(r.url));
+    item.results = [];
+  }
+
+  function releaseItemMedia(item) {
+    if (item.srcUrl) URL.revokeObjectURL(item.srcUrl);
+    releaseResults(item);
+  }
+
+  async function addFiles(fileList) {
     const files = [...fileList].filter(f => f.type.startsWith('image/'));
     if (!files.length) return;
-    // Un seul rendu une fois que toutes les images du lot sont chargées —
-    // sinon chaque image décodée individuellement re-génère toute la grille
-    // (grid.innerHTML = '') et peut arracher un bouton sous le clic de l'utilisateur.
-    Promise.all(files.map(loadImageFile)).then(newItems => {
-      newItems.forEach(item => S.items.push(item));
-      renderQueue();
-      updateButtons();
-    });
+    // Par paquets : un gros lot ne décode pas des centaines d'images d'un coup, et un fichier illisible est ignoré
+    const CHUNK = 6;
+    const failed = [];
+    for (let i = 0; i < files.length; i += CHUNK) {
+      q('ips-count').textContent = `chargement ${Math.min(i + CHUNK, files.length)}/${files.length}…`;
+      const slice = files.slice(i, i + CHUNK);
+      const items = await Promise.all(slice.map(loadImageFile));
+      items.forEach((item, k) => item ? S.items.push(item) : failed.push(slice[k].name));
+    }
+    renderQueue();
+    updateButtons();
+    if (failed.length) showErrorToast(`${failed.length} image(s) illisible(s) ignorée(s) : ${failed.slice(0, 3).join(', ')}${failed.length > 3 ? '…' : ''}`);
   }
 
   function removeItem(id) {
     if (S.running) return;
+    const gone = S.items.find(it => it.id === id);
+    if (gone) releaseItemMedia(gone);
     S.items = S.items.filter(it => it.id !== id);
-    // Plus aucune image en file → le masque template n'a plus de sens,
-    // sinon il restait appliqué aux prochaines images importées.
-    if (!S.items.length) S.templateMaskCanvas = null;
+    // Plus aucune photo : les masques modèles n'ont plus de sens pour les prochaines
+    if (!S.items.length) S.template = null;
     renderQueue();
     updateButtons();
   }
 
-  function clearQueue() {
-    if (S.running) return;
+  async function clearQueue() {
+    if (S.running || !S.items.length) return;
+    if (!await uiConfirm({ title: 'Vider la file ?', html: `<p>${S.items.length} photo${S.items.length > 1 ? 's' : ''} et leurs masques seront retirés.</p>`, okLabel: 'Vider', danger: true })) return;
+    S.items.forEach(releaseItemMedia);
     S.items = [];
-    S.templateMaskCanvas = null;
+    S.template = null;
     renderQueue();
     updateButtons();
   }
@@ -309,9 +362,9 @@ const InpaintScheduler = (() => {
     if (S.running) return;
     S.items.forEach(it => {
       if (it.status === 'done' || it.status === 'error') {
-        it.status    = it.maskCanvas ? 'ready' : 'no-mask';
-        it.resultURL = null;
-        it.errMsg    = null;
+        releaseResults(it);
+        it.status = it.masks.length ? 'ready' : 'no-mask';
+        it.errMsg = null;
       }
     });
     renderQueue();
@@ -320,38 +373,50 @@ const InpaintScheduler = (() => {
 
   function renderQueue() {
     const grid = q('ips-grid');
-    q('ips-count').textContent = `${S.items.length} image${S.items.length !== 1 ? 's' : ''}`;
-    if (!S.items.length) {
-      grid.innerHTML = '<div class="sws-empty">Aucune image — clique ＋ Ajouter des images.</div>';
-      return;
-    }
+    q('ips-count').textContent = S.items.length ? `${S.items.length} photo${S.items.length !== 1 ? 's' : ''}` : '';
     grid.innerHTML = '';
     S.items.forEach(item => {
       const card = document.createElement('div');
-      card.className = 'ips-card';
+      card.className = 'ips-card ' + item.status;
+      const firstPrompt = item.masks[0]?.prompt || '';
       card.innerHTML = `
-        <img class="ips-card-thumb" src="${esc(item.image.src)}" alt="">
+        <img class="ips-card-thumb" alt="">
         <div class="ips-card-body">
           <div class="ips-card-name" title="${esc(item.name)}">${esc(item.name)}</div>
-          <span class="ips-card-badge ${item.status}">${statusLabel(item.status)}</span>
-          <div class="ips-card-prompt" style="color:var(--text2)">${item.width}×${item.height} · ${item.areaMode === 'whole' ? 'Whole' : 'Masked'}</div>
-          ${item.prompt ? `<div class="ips-card-prompt" title="${esc(item.prompt)}">${esc(item.prompt)}</div>` : ''}
+          <span class="ips-card-badge ${item.status}">${statusLabel(item.status)}${item.status === 'done' && item.results.length > 1 ? ` · ${item.results.length} images` : ''}</span>
+          <div class="ips-card-masks">
+            ${item.masks.length
+              ? item.masks.map(m => `<span class="ips-dot" style="--c:${m.color}" title="${esc(m.prompt)}"></span>`).join('') + ` ${item.masks.length} masque${item.masks.length > 1 ? 's' : ''}`
+              : 'Aucun masque'}
+          </div>
+          ${firstPrompt ? `<div class="ips-card-prompt" title="${esc(firstPrompt)}">${esc(firstPrompt)}</div>` : ''}
+          ${item.status === 'error' && item.errMsg ? `<div class="ips-card-prompt" style="color:var(--red)" title="${esc(item.errMsg)}">${esc(item.errMsg)}</div>` : ''}
           <div class="ips-card-actions">
-            <button class="inp-btn-sm" data-act="mask">✏ Masque</button>
-            <button class="inp-btn-sm inp-btn-danger" data-act="del">✕</button>
+            <button class="q-btn sm" data-act="mask">✏ Masques</button>
+            <button class="q-btn sm danger" data-act="del" title="Retirer">✕</button>
           </div>
         </div>`;
+      card.querySelector('.ips-card-thumb').src = item.thumb;
       card.querySelector('[data-act="mask"]').addEventListener('click', () => openMaskEditor(item.id));
       card.querySelector('[data-act="del"]').addEventListener('click', () => removeItem(item.id));
+      card.querySelector('.ips-card-thumb').addEventListener('click', () => openMaskEditor(item.id));
       grid.appendChild(card);
     });
   }
 
-  // ── Mask editor (brush/eraser/undo/invert/clear) ──────────────────────────
+  // ── Éditeur de masques ────────────────────────────────────────────────────
+  const activeMask = () => S.editMasks[S.activeMask];
+
   function setTool(tool) {
     S.tool = tool;
     q('ips-brush-btn').classList.toggle('on',  tool === 'brush');
     q('ips-eraser-btn').classList.toggle('on', tool === 'eraser');
+  }
+
+  function setBrushSize(v, fromField = false) {
+    S.brushSize = Math.max(1, Math.min(500, Math.round(+v) || 1));
+    q('ips-brush-range').value = Math.min(S.brushSize, 200);
+    if (!fromField) q('ips-brush-val').value = S.brushSize;
   }
 
   function getPos(e) {
@@ -364,11 +429,12 @@ const InpaintScheduler = (() => {
   }
 
   function paintAt(pos, fromPos) {
-    const ctx = S.maskCtx;
-    if (!ctx) return;
+    const m = activeMask();
+    if (!m) return;
+    const ctx = m.ctx;
     ctx.globalCompositeOperation = S.tool === 'eraser' ? 'destination-out' : 'source-over';
     ctx.strokeStyle = 'white';
-    ctx.lineWidth   = S.brushSize;
+    ctx.lineWidth   = S.brushSize / (S.displayK || 1);
     ctx.lineCap     = 'round';
     ctx.lineJoin    = 'round';
     ctx.beginPath();
@@ -379,25 +445,35 @@ const InpaintScheduler = (() => {
     syncMaskDisplay();
   }
 
+  // Tous les masques, chacun dans sa couleur ; les autres que l'actif un peu effacés
+  const _tint = document.createElement('canvas');
   function syncMaskDisplay() {
     const display = q('ips-c-mask');
     const dCtx = display.getContext('2d');
     dCtx.clearRect(0, 0, display.width, display.height);
-    dCtx.drawImage(S.maskCanvas, 0, 0);
-    dCtx.globalCompositeOperation = 'source-in';
-    dCtx.fillStyle = '#ff2020';
-    dCtx.fillRect(0, 0, display.width, display.height);
-    dCtx.globalCompositeOperation = 'source-over';
+    _tint.width = display.width; _tint.height = display.height;
+    const tCtx = _tint.getContext('2d');
+    S.editMasks.forEach((m, i) => {
+      tCtx.globalCompositeOperation = 'source-over';
+      tCtx.clearRect(0, 0, _tint.width, _tint.height);
+      tCtx.drawImage(m.canvas, 0, 0);
+      tCtx.globalCompositeOperation = 'source-in';
+      tCtx.fillStyle = m.color;
+      tCtx.fillRect(0, 0, _tint.width, _tint.height);
+      dCtx.globalAlpha = i === S.activeMask ? 1 : 0.5;
+      dCtx.drawImage(_tint, 0, 0);
+    });
+    dCtx.globalAlpha = 1;
   }
 
   function drawCursor(pos) {
     const c = q('ips-c-cur');
     const ctx = c.getContext('2d');
     ctx.clearRect(0, 0, c.width, c.height);
-    ctx.strokeStyle = S.tool === 'eraser' ? '#aaa' : '#fff';
-    ctx.lineWidth = 1.5;
+    ctx.strokeStyle = S.tool === 'eraser' ? '#aaa' : (activeMask()?.color || '#fff');
+    ctx.lineWidth = 2 / (S.displayK || 1);
     ctx.beginPath();
-    ctx.arc(pos.x, pos.y, S.brushSize / 2, 0, Math.PI * 2);
+    ctx.arc(pos.x, pos.y, S.brushSize / (S.displayK || 1) / 2, 0, Math.PI * 2);
     ctx.stroke();
   }
 
@@ -406,50 +482,127 @@ const InpaintScheduler = (() => {
     if (c) c.getContext('2d').clearRect(0, 0, c.width, c.height);
   }
 
+  // Chaque étape d'annulation est une ImageData pleine taille : historique plafonné en nombre et en octets
+  const UNDO_BUDGET = 192 * 1024 * 1024;
+
   function saveUndo() {
-    if (!S.maskCtx) return;
-    S.undoStack.push(S.maskCtx.getImageData(0, 0, S.maskCanvas.width, S.maskCanvas.height));
-    if (S.undoStack.length > 30) S.undoStack.shift();
+    const m = activeMask();
+    if (!m) return;
+    S.undoStack.push({ maskId: m.id, data: m.ctx.getImageData(0, 0, m.canvas.width, m.canvas.height) });
+    let total = S.undoStack.reduce((n, f) => n + f.data.data.length, 0);
+    while (S.undoStack.length > 1 && (S.undoStack.length > 30 || total > UNDO_BUDGET)) {
+      total -= S.undoStack.shift().data.data.length;
+    }
   }
 
   function undo() {
-    if (!S.undoStack.length || !S.maskCtx) return;
-    S.maskCtx.putImageData(S.undoStack.pop(), 0, 0);
+    const step = S.undoStack.pop();
+    if (!step) return;
+    const m = S.editMasks.find(x => x.id === step.maskId);
+    if (!m) return undo();   // masque supprimé depuis : étape suivante
+    m.ctx.putImageData(step.data, 0, 0);
+    S.activeMask = S.editMasks.indexOf(m);
+    renderMaskList();
     syncMaskDisplay();
   }
 
   function clearMask() {
-    if (!S.maskCtx) return;
+    const m = activeMask();
+    if (!m) return;
     saveUndo();
-    S.maskCtx.clearRect(0, 0, S.maskCanvas.width, S.maskCanvas.height);
+    m.ctx.clearRect(0, 0, m.canvas.width, m.canvas.height);
     syncMaskDisplay();
   }
 
   function invertMask() {
-    if (!S.maskCtx) return;
+    const m = activeMask();
+    if (!m) return;
     saveUndo();
-    const w = S.maskCanvas.width, h = S.maskCanvas.height;
-    const id = S.maskCtx.getImageData(0, 0, w, h);
+    const w = m.canvas.width, h = m.canvas.height;
+    const id = m.ctx.getImageData(0, 0, w, h);
     const d  = id.data;
     for (let i = 0; i < d.length; i += 4) {
       const painted = d[i + 3] > 10;
       d[i] = d[i + 1] = d[i + 2] = 255;
       d[i + 3] = painted ? 0 : 255;
     }
-    S.maskCtx.putImageData(id, 0, 0);
+    m.ctx.putImageData(id, 0, 0);
     syncMaskDisplay();
+  }
+
+  function newEditMask(w, h, i, prompt = '', negative = '') {
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    return { id: S.nextMaskId++, color: colorFor(i), canvas, ctx: canvas.getContext('2d', { willReadFrequently: true }), prompt, negative };
+  }
+
+  function addMask() {
+    const c = q('ips-c-img');
+    const usedColors = new Set(S.editMasks.map(m => m.color));
+    const i = MASK_COLORS.findIndex(col => !usedColors.has(col));
+    const m = newEditMask(c.width, c.height, i === -1 ? S.editMasks.length : i);
+    S.editMasks.push(m);
+    S.activeMask = S.editMasks.length - 1;
+    renderMaskList();
+    syncMaskDisplay();
+    setTimeout(() => q('ips-masks').querySelector(`[data-mid="${m.id}"] textarea`)?.focus(), 30);
+  }
+
+  async function deleteMask(i) {
+    if (S.editMasks.length <= 1) { clearMask(); return; }
+    const m = S.editMasks[i];
+    if (!canvasIsEmpty(m.canvas) && !await uiConfirm({ title: `Supprimer le masque ${i + 1} ?`, okLabel: 'Supprimer', danger: true })) return;
+    S.editMasks.splice(i, 1);
+    S.activeMask = Math.min(S.activeMask, S.editMasks.length - 1);
+    renderMaskList();
+    syncMaskDisplay();
+  }
+
+  function renderMaskList() {
+    const list = q('ips-masks');
+    list.innerHTML = '';
+    S.editMasks.forEach((m, i) => {
+      const row = document.createElement('div');
+      row.className = 'ips-mask-row' + (i === S.activeMask ? ' active' : '');
+      row.style.setProperty('--c', m.color);
+      row.dataset.mid = m.id;
+      row.innerHTML = `
+        <span class="ips-dot" style="--c:${m.color}"></span>
+        <div class="ips-mask-fields">
+          <b>Masque ${i + 1}</b>
+          <textarea rows="2" placeholder="Que mettre dans cette zone ?"></textarea>
+          <textarea rows="1" placeholder="Negative (optionnel, sinon celui par défaut)"></textarea>
+        </div>
+        <button class="ips-mask-del" title="Supprimer ce masque">✕</button>`;
+      const [pTa, nTa] = row.querySelectorAll('textarea');
+      pTa.value = m.prompt || '';
+      nTa.value = m.negative || '';
+      pTa.addEventListener('input', () => { m.prompt = pTa.value; });
+      nTa.addEventListener('input', () => { m.negative = nTa.value; });
+      if (typeof TagComplete !== 'undefined') { TagComplete.attach(pTa); TagComplete.attach(nTa); }
+      const select = () => {
+        if (S.activeMask === i) return;
+        S.activeMask = i;
+        list.querySelectorAll('.ips-mask-row').forEach((r, k) => r.classList.toggle('active', k === i));
+        syncMaskDisplay();
+      };
+      row.addEventListener('mousedown', select);
+      pTa.addEventListener('focus', select);
+      nTa.addEventListener('focus', select);
+      row.querySelector('.ips-mask-del').addEventListener('click', e => { e.stopPropagation(); deleteMask(i); });
+      list.appendChild(row);
+    });
   }
 
   function openMaskEditor(id) {
     const item = S.items.find(it => it.id === id);
-    if (!item) return;
+    if (!item || S.running) return;
     S.editingId = id;
     q('ips-main').classList.add('editing-mask');
 
-    const wrap = q('ips-canvas-wrap');
-    const maxW = (wrap?.clientWidth  || window.innerWidth  - 700) - 40;
-    const maxH = (wrap?.clientHeight || window.innerHeight - 120) - 40;
-    const scale = Math.min(maxW / item.image.width, maxH / item.image.height, 1);
+    // Résolution de travail fixe (précise), indépendante de la taille de la fenêtre ; l'affichage
+    // est ensuite ajusté à la place disponible par fitEditor() (et suit les redimensionnements).
+    const scale = Math.min(1, 1600 / Math.max(item.image.width, item.image.height));
     const dW = Math.round(item.image.width  * scale);
     const dH = Math.round(item.image.height * scale);
 
@@ -457,27 +610,25 @@ const InpaintScheduler = (() => {
     imgC.width = dW; imgC.height = dH;
     imgC.getContext('2d').drawImage(item.image, 0, 0, dW, dH);
 
-    S.maskCanvas = document.createElement('canvas');
-    S.maskCanvas.width  = dW;
-    S.maskCanvas.height = dH;
-    S.maskCtx = S.maskCanvas.getContext('2d', { willReadFrequently: true });
-    if (item.maskCanvas) S.maskCtx.drawImage(item.maskCanvas, 0, 0, dW, dH);
+    // Copies de travail (validées seulement par « ✓ Valider »)
+    S.editMasks = item.masks.map((m, i) => {
+      const em = newEditMask(dW, dH, i, m.prompt, m.negative);
+      em.color = m.color;
+      em.ctx.drawImage(m.canvas, 0, 0, dW, dH);
+      return em;
+    });
+    if (!S.editMasks.length) S.editMasks.push(newEditMask(dW, dH, 0, q('ips-prompt').value, ''));
+    S.activeMask = 0;
     S.undoStack = [];
 
     const maskC = q('ips-c-mask');
     maskC.width = dW; maskC.height = dH;
     maskC.style.opacity = q('ips-opacity-range').value / 100;
-    syncMaskDisplay();
-
     const curC = q('ips-c-cur');
     curC.width = dW; curC.height = dH;
-
-    const stack = q('ips-stack');
-    stack.style.width  = dW + 'px';
-    stack.style.height = dH + 'px';
-
-    q('ips-item-prompt').value = item.prompt   || '';
-    q('ips-item-neg').value    = item.negative || '';
+    renderMaskList();
+    requestAnimationFrame(fitEditor);
+    syncMaskDisplay();
 
     const areaEl = document.querySelector(`input[name="ips-item-area"][value="${item.areaMode}"]`);
     if (areaEl) areaEl.checked = true;
@@ -485,25 +636,33 @@ const InpaintScheduler = (() => {
     q('ips-item-h').value = item.height;
   }
 
+  function fitEditor() {
+    if (!S.editingId) return;
+    const wrap = q('ips-canvas-wrap'), c = q('ips-c-img');
+    const k = Math.min((wrap.clientWidth - 40) / c.width, (wrap.clientHeight - 40) / c.height, 1);
+    S.displayK = k > 0 ? k : 1;   // la taille du pinceau est en pixels d'écran
+    const stack = q('ips-stack');
+    stack.style.width  = Math.max(1, Math.round(c.width  * k)) + 'px';
+    stack.style.height = Math.max(1, Math.round(c.height * k)) + 'px';
+  }
+
   function saveMaskAndClose() {
     const item = S.items.find(it => it.id === S.editingId);
     if (item) {
-      item.maskCanvas = document.createElement('canvas');
-      item.maskCanvas.width  = S.maskCanvas.width;
-      item.maskCanvas.height = S.maskCanvas.height;
-      item.maskCanvas.getContext('2d').drawImage(S.maskCanvas, 0, 0);
-      item.status = 'ready';
-
-      S.templateMaskCanvas = document.createElement('canvas');
-      S.templateMaskCanvas.width  = S.maskCanvas.width;
-      S.templateMaskCanvas.height = S.maskCanvas.height;
-      S.templateMaskCanvas.getContext('2d').drawImage(S.maskCanvas, 0, 0);
-
-      item.prompt   = q('ips-item-prompt').value;
-      item.negative = q('ips-item-neg').value;
+      const kept = S.editMasks.filter(m => !canvasIsEmpty(m.canvas));
+      item.masks = kept.map(m => ({ id: m.id, color: m.color, canvas: copyCanvas(m.canvas), prompt: m.prompt.trim(), negative: m.negative.trim() }));
+      if (item.status !== 'running') item.status = item.masks.length ? 'ready' : 'no-mask';
+      if (item.masks.length) S.template = item.masks.map(m => ({ ...m, canvas: copyCanvas(m.canvas) }));
+      if (item.masks.length && q('ips-apply-others').checked) {
+        const others = S.items.filter(it => it !== item && !it.masks.length && it.status === 'no-mask');
+        others.forEach(it => { it.masks = cloneMasks(item.masks); it.status = 'ready'; });
+        if (others.length) toast(`Masques appliqués à ${others.length} autre${others.length > 1 ? 's' : ''} photo${others.length > 1 ? 's' : ''}`);
+      }
       item.areaMode = document.querySelector('input[name="ips-item-area"]:checked')?.value || 'only_masked';
-      item.width    = +q('ips-item-w').value  || item.image.width;
-      item.height   = +q('ips-item-h').value  || item.image.height;
+      item.width    = +q('ips-item-w').value || item.image.width;
+      item.height   = +q('ips-item-h').value || item.image.height;
+      const empty = S.editMasks.length - kept.length;
+      if (empty) toast(`${empty} masque${empty > 1 ? 's' : ''} vide${empty > 1 ? 's' : ''} ignoré${empty > 1 ? 's' : ''}`);
     }
     closeMaskEditor();
     renderQueue();
@@ -512,47 +671,45 @@ const InpaintScheduler = (() => {
 
   function closeMaskEditor() {
     S.editingId = null;
+    S.editMasks = [];
+    S.undoStack = [];
     q('ips-main').classList.remove('editing-mask');
   }
 
-  // ── Batch run ──────────────────────────────────────────────────────────────
+  // ── Lancement ─────────────────────────────────────────────────────────────
   function setProgress(pct, label) {
-    const p = Math.round(pct * 100);
+    const p = Math.round(Math.min(1, Math.max(0, pct)) * 100);
     q('ips-prog-bar').style.width   = p + '%';
-    q('ips-prog-pct').textContent   = p + '%';
+    q('ips-prog-pct').textContent   = S.running ? p + '%' : '';
     q('ips-prog-status').textContent = label || '';
   }
 
-  async function runOne(item) {
+  function maskToB64(canvas, w, h) {
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = 'black';
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(canvas, 0, 0, w, h);
+    return c.toDataURL('image/png');
+  }
+
+  // Une passe Forge : un masque sur une image ; renvoie `count` images en base64
+  async function forgePass(item, initB64, mask, count, onProgress) {
     const forgeUrl = getForgeUrl();
     const abort = new AbortController();
     S._abort = abort;
-
-    const imgC = document.createElement('canvas');
-    imgC.width  = item.image.width;
-    imgC.height = item.image.height;
-    imgC.getContext('2d').drawImage(item.image, 0, 0);
-    const imageB64 = imgC.toDataURL('image/png');
-
-    const maskC = document.createElement('canvas');
-    maskC.width  = item.image.width;
-    maskC.height = item.image.height;
-    const mCtx = maskC.getContext('2d');
-    mCtx.fillStyle = 'black';
-    mCtx.fillRect(0, 0, maskC.width, maskC.height);
-    mCtx.drawImage(item.maskCanvas, 0, 0, maskC.width, maskC.height);
-    const maskB64 = maskC.toDataURL('image/png');
-
+    const defaultNeg = q('ips-neg').value || '';
     const payload = {
-      init_images:              [imageB64],
-      mask:                     maskB64,
+      init_images:              [initB64],
+      mask:                     maskToB64(mask.canvas, item.image.width, item.image.height),
       mask_blur:                +q('ips-mblur').value,
       inpainting_fill:          +q('ips-fill-mode').value,
       inpaint_full_res:         item.areaMode === 'only_masked',
       inpaint_full_res_padding: +q('ips-pad').value,
       inpainting_mask_invert:   0,
-      prompt:                   item.prompt   || '',
-      negative_prompt:          item.negative || '',
+      prompt:                   mask.prompt || q('ips-prompt').value || '',
+      negative_prompt:          mask.negative || defaultNeg,
       seed:                     -1,
       steps:                    +q('ips-steps').value,
       cfg_scale:                +q('ips-cfg').value,
@@ -560,7 +717,9 @@ const InpaintScheduler = (() => {
       height:                   item.height || item.image.height,
       sampler_name:             q('ips-sampler').value || 'DPM++ 2M',
       denoising_strength:       +q('ips-denoise').value,
-      override_settings: { sd_model_checkpoint: q('ips-sel-model').value },
+      n_iter:                   count,   // passes successives : même VRAM qu'une seule image
+      batch_size:               1,
+      override_settings: { sd_model_checkpoint: q('ips-sel-model').value, return_grid: false },
       override_settings_restore_afterwards: false,
       send_images: true,
       save_images: false,
@@ -568,10 +727,10 @@ const InpaintScheduler = (() => {
     const scheduler = q('ips-scheduler').value;
     if (scheduler) payload.scheduler = scheduler;
 
-    let pollId = setInterval(async () => {
+    const pollId = setInterval(async () => {
       try {
         const prog = await fetch(`${forgeUrl}/sdapi/v1/progress`).then(r => r.json());
-        if (prog.progress > 0) setProgress(prog.progress, `Generating… ${Math.round(prog.progress * 100)}%`);
+        if (prog.progress > 0) onProgress(prog.progress);
       } catch { /* ignore polling errors */ }
     }, 700);
 
@@ -587,31 +746,63 @@ const InpaintScheduler = (() => {
         throw new Error(`Forge ${resp.status} — ${txt.slice(0, 200)}`);
       }
       const data = await resp.json();
-      const resultB64 = data.images?.[0];
-      if (!resultB64) throw new Error('No image in Forge response');
-      item.resultURL = `data:image/png;base64,${resultB64}`;
-      setProgress(1, 'Done');
+      // Forge ajoute une grille en tête quand il y a plusieurs images : on garde les N dernières
+      const images = (data.images || []).slice(-count);
+      if (!images.length) throw new Error('Pas d\'image dans la réponse de Forge');
+      return images.map(b => `data:image/png;base64,${b}`);
     } finally {
       clearInterval(pollId);
       S._abort = null;
     }
   }
 
-  function addToGallery(item) {
+  // Une photo : masque 1 en `count` exemplaires, puis chaque exemplaire passe par les masques suivants
+  async function runOne(item, label) {
+    const imgC = document.createElement('canvas');
+    imgC.width  = item.image.width;
+    imgC.height = item.image.height;
+    imgC.getContext('2d').drawImage(item.image, 0, 0);
+    const original = imgC.toDataURL('image/png');
+
+    const nMasks = item.masks.length;
+    const totalPasses = 1 + (nMasks - 1) * S.count;
+    let pass = 0;
+    const step = (txt) => p => setProgress((pass + p) / totalPasses, `${label} — ${txt}`);
+
+    let variants = await forgePass(item, original, item.masks[0], S.count,
+      step(`masque 1/${nMasks}${S.count > 1 ? ` · ${S.count} images` : ''}`));
+    pass++;
+    for (let k = 1; k < nMasks; k++) {
+      for (let v = 0; v < variants.length; v++) {
+        if (S.stopReq) throw new Error('stopped');
+        const [out] = await forgePass(item, variants[v], item.masks[k], 1,
+          step(`masque ${k + 1}/${nMasks}${variants.length > 1 ? ` · image ${v + 1}/${variants.length}` : ''}`));
+        variants[v] = out;
+        pass++;
+      }
+    }
+
+    releaseResults(item);
+    for (const dataUrl of variants) {
+      const blob = await (await fetch(dataUrl)).blob();
+      item.results.push({ blob, url: URL.createObjectURL(blob) });
+    }
+  }
+
+  function addToGallery(item, result) {
     q('ips-gallery').querySelector('.sws-gal-empty')?.remove();
     const card = document.createElement('div');
     card.className = 'ips-result-card';
-    card.innerHTML = `<img src="${esc(item.resultURL)}" alt="">
+    card.innerHTML = `<img src="${esc(result.url)}" alt="" title="${esc(item.name)}">
       <div class="ips-result-actions">
-        <button class="ips-result-copy" title="Copy image">📋</button>
-        <button class="ips-result-dl" title="Download">⬇</button>
+        <button class="ips-result-copy" title="Copier l'image">📋</button>
+        <button class="ips-result-dl" title="Télécharger">⬇</button>
       </div>`;
-    card.querySelector('.ips-result-copy').addEventListener('click', () => {
-      copyImageToClipboard(item.resultURL);
-    });
+    card.querySelector('img').addEventListener('click', () => openLightbox(result.url, 'ips-gallery', '.ips-result-card > img'));
+    card.querySelector('.ips-result-copy').addEventListener('click', () => copyImageToClipboard(result.url));
     card.querySelector('.ips-result-dl').addEventListener('click', () => {
       const a = document.createElement('a');
-      a.href = item.resultURL;
+      a.href = result.url;
       a.download = `inpaint-${item.name.replace(/\.[^.]+$/, '')}.png`;
       a.click();
     });
@@ -619,10 +810,11 @@ const InpaintScheduler = (() => {
   }
 
   async function runQueue() {
-    if (!S.forgeOnline) { toast('Forge non connecté'); return; }
+    if (!S.forgeOnline) { showErrorToast('Forge non connecté'); return; }
     if (S.running) return;
     const pending = S.items.filter(it => it.status === 'ready');
-    if (!pending.length) { toast('Aucune image prête — dessine un masque'); return; }
+    if (!pending.length) { showErrorToast('Aucune photo prête — dessine au moins un masque'); return; }
+    if (S.editingId) closeMaskEditor();
 
     S.running = true; S.paused = false; S.stopReq = false;
     updateButtons();
@@ -641,32 +833,34 @@ const InpaintScheduler = (() => {
       renderQueue();
       q('ips-prog-name').textContent = item.name;
       q('ips-prog-name').style.color = '';
-      q('ips-qcounter').textContent  = `${done + 1} / ${total}`;
-      setProgress(0, 'Starting…');
+      q('ips-qcounter').textContent  = `Photo ${done + 1} sur ${total}`;
+      setProgress(0, 'Démarrage…');
 
       try {
-        await runOne(item);
+        await runOne(item, `Photo ${done + 1}/${total}`);
         item.status = 'done'; done++;
-        addToGallery(item);
+        item.results.forEach(r => addToGallery(item, r));
       } catch (e) {
+        if (S.stopReq) { item.status = 'ready'; break; }
         item.status = 'error'; item.errMsg = e.message;
-        toast(`"${item.name}" a échoué: ${e.message}`);
+        showErrorToast(`« ${item.name} » a échoué : ${e.message}`);
       }
       renderQueue();
     }
 
     S.running = false; S.paused = false;
+    q('ips-btn-pause').textContent = '⏸';
     updateButtons();
     q('ips-qcounter').textContent = '';
+    renderQueue();
 
     if (!S.stopReq) {
       const failed = total - done;
-      q('ips-prog-name').textContent = `Terminé — ${done}/${total}`;
-      q('ips-prog-name').style.color = failed > 0 ? 'var(--yellow, #fa0)' : 'var(--green)';
-      setProgress(1, '');
-      toast(`Batch terminé — ${done}/${total} images réussies`);
+      q('ips-prog-name').textContent = failed ? `Terminé — ${failed} en erreur` : 'Terminé';
+      q('ips-prog-name').style.color = failed > 0 ? 'var(--orange)' : 'var(--green)';
+      setProgress(1, `${done}/${total} photo${total > 1 ? 's' : ''}`);
     } else {
-      q('ips-prog-name').textContent = 'Stopped';
+      q('ips-prog-name').textContent = 'Arrêté';
       q('ips-prog-name').style.color = 'var(--red)';
       setProgress(0, '');
     }
@@ -674,7 +868,7 @@ const InpaintScheduler = (() => {
 
   function togglePause() {
     S.paused = !S.paused;
-    q('ips-btn-pause').textContent = S.paused ? '▶ Resume' : '⏸ Pause';
+    q('ips-btn-pause').textContent = S.paused ? '▶' : '⏸';
   }
 
   function stopQueue() {
@@ -683,23 +877,23 @@ const InpaintScheduler = (() => {
   }
 
   async function downloadAllZip() {
-    const doneItems = S.items.filter(it => it.status === 'done' && it.resultURL);
-    if (!doneItems.length) { toast('Aucune image générée'); return; }
+    const results = S.items.filter(it => it.status === 'done').flatMap(it => it.results.map((r, k) => ({ it, r, k })));
+    if (!results.length) { showErrorToast('Aucune image générée'); return; }
     const zip = new JSZip();
-    doneItems.forEach((item, i) => {
-      const b64 = item.resultURL.split(',')[1];
-      zip.file(`${String(i + 1).padStart(3, '0')}_${item.name.replace(/\.[^.]+$/, '')}.png`, b64, { base64: true });
+    results.forEach(({ it, r, k }, i) => {
+      const base = it.name.replace(/\.[^.]+$/, '');
+      zip.file(`${String(i + 1).padStart(3, '0')}_${base}${it.results.length > 1 ? `_${k + 1}` : ''}.png`, r.blob);
     });
     const blob = await zip.generateAsync({ type: 'blob' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `inpaint-scheduler-${Date.now()}.zip`;
+    a.download = `inpaint-par-lot-${Date.now()}.zip`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
   }
 
   function clearGallery() {
-    q('ips-gallery').innerHTML = '<div class="sws-gal-empty">Images will appear here</div>';
+    q('ips-gallery').innerHTML = '<div class="sws-gal-empty">Les retouches apparaîtront ici</div>';
   }
 
   // ── UI binding ─────────────────────────────────────────────────────────────
@@ -722,15 +916,13 @@ const InpaintScheduler = (() => {
     q('ips-btn-clear').onclick = clearQueue;
     q('ips-forge-reconnect').onclick = connectForge;
     q('ips-forge-launch').onclick = launchForge;
-    if (window.electronAPI?.platform === 'win32') {
-      q('ips-forge-launch').style.display = '';
-    }
+    if (window.electronAPI?.platform === 'win32') q('ips-forge-launch').style.display = '';
     q('ips-free-swarm-vram').onclick = async () => {
       try {
         const res = await API.freeBackendMemory?.();
         toast(res ? '✅ VRAM SwarmUI libérée' : '⚠ SwarmUI non connecté');
       } catch (e) {
-        toast(`❌ ${e.message}`);
+        showErrorToast(e.message);
       }
     };
     q('ips-dl-all').onclick    = downloadAllZip;
@@ -740,6 +932,13 @@ const InpaintScheduler = (() => {
     q('ips-preset-del').onclick  = deletePreset;
     q('ips-preset-save').onclick = savePreset;
 
+    // Nombre d'images par photo
+    document.querySelectorAll('#ips-seg-count button').forEach(b => b.addEventListener('click', () => { q('ips-count-custom').value = ''; setCount(b.dataset.v); }));
+    q('ips-count-custom').addEventListener('change', e => { if (e.target.value !== '') setCount(e.target.value); });
+    q('ips-count-custom').addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); });
+    syncCount();
+
+    // Éditeur
     q('ips-brush-btn').onclick   = () => setTool('brush');
     q('ips-eraser-btn').onclick  = () => setTool('eraser');
     q('ips-undo-btn').onclick    = undo;
@@ -747,6 +946,7 @@ const InpaintScheduler = (() => {
     q('ips-invert-btn').onclick  = invertMask;
     q('ips-editor-back').onclick = closeMaskEditor;
     q('ips-editor-done').onclick = saveMaskAndClose;
+    q('ips-mask-add').onclick    = addMask;
 
     document.querySelectorAll('#ips-item-ratio-grid .inp-rbtn[data-w]').forEach(btn => {
       btn.onclick = () => { q('ips-item-w').value = btn.dataset.w; q('ips-item-h').value = btn.dataset.h; };
@@ -756,30 +956,46 @@ const InpaintScheduler = (() => {
       if (item) { q('ips-item-w').value = item.image.width; q('ips-item-h').value = item.image.height; }
     };
 
-    q('ips-brush-range').oninput = function () {
-      S.brushSize = +this.value;
-      q('ips-brush-val').textContent = this.value;
-    };
-    q('ips-opacity-range').oninput = function () {
-      q('ips-c-mask').style.opacity = this.value / 100;
-    };
+    q('ips-brush-range').oninput = function () { setBrushSize(this.value); };
+    q('ips-brush-val').oninput   = function () { if (+this.value >= 1) setBrushSize(this.value, true); };
+    q('ips-brush-val').onchange  = function () { setBrushSize(this.value); };
+    q('ips-brush-val').addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); });
+    q('ips-opacity-range').oninput = function () { q('ips-c-mask').style.opacity = this.value / 100; };
+    document.addEventListener('keydown', e => {
+      if (!S.editingId || (e.key !== '[' && e.key !== ']')) return;
+      const a = document.activeElement;
+      if (a && (a.tagName === 'TEXTAREA' || (a.tagName === 'INPUT' && a.type === 'text'))) return;
+      e.preventDefault();
+      const stepSize = S.brushSize < 20 ? 2 : S.brushSize < 100 ? 5 : 10;
+      setBrushSize(S.brushSize + (e.key === ']' ? stepSize : -stepSize));
+    });
 
+    window.addEventListener('resize', fitEditor);
     const ctr = q('ips-canvas-wrap');
     ctr.onmousedown = e => {
-      if (!S.maskCtx || e.button !== 0) return;
+      if (!activeMask() || e.button !== 0) return;
       saveUndo();
       S.drawing = true;
       S.lastPos = getPos(e);
       paintAt(S.lastPos, null);
     };
     ctr.onmousemove = e => {
-      if (!S.maskCtx) return;
+      if (!activeMask()) return;
       const pos = getPos(e);
       drawCursor(pos);
       if (S.drawing) { paintAt(pos, S.lastPos); S.lastPos = pos; }
     };
     ctr.onmouseup    = () => { S.drawing = false; S.lastPos = null; };
     ctr.onmouseleave = () => { S.drawing = false; S.lastPos = null; clearCursor(); };
+
+    // Glisser des photos directement sur la file
+    const main = q('ips-main');
+    main.addEventListener('dragover', e => { if (!S.editingId) e.preventDefault(); });
+    main.addEventListener('drop', e => {
+      if (S.editingId) return;
+      e.preventDefault();
+      if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files);
+    });
 
     bindSlider('ips-steps',   'ips-steps-val',   0);
     bindSlider('ips-cfg',     'ips-cfg-val',     1);
@@ -793,6 +1009,7 @@ const InpaintScheduler = (() => {
     S.initialized = true;
     bindUI();
     renderPresetList();
+    renderQueue();
   }
 
   function onShow() {

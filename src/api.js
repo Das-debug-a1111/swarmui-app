@@ -2,7 +2,6 @@
 const API = {
   host:    'localhost:7801',
   session: null,
-  _ws:     null,
 
   get origin()   { return `http://${this.host}`; },
   get wsOrigin() { return `ws://${this.host}`; },
@@ -44,6 +43,14 @@ const API = {
     return this.post('/API/ListT2IParams', { session_id: this.session });
   },
 
+  // ── Server status (supported feature flags) / ComfyUI node-pack install ──────
+  async getStatus() {
+    return this.post('/API/GetCurrentStatus', { session_id: this.session });
+  },
+  async installComfyFeatures(features) {
+    return this.post('/API/ComfyInstallFeatures', { session_id: this.session, features });
+  },
+
   // ── Refresh model cache on disk ───────────────────────────────────────────────
   async triggerRefresh(strong = true) {
     return this.post('/API/TriggerRefresh', { session_id: this.session, strong });
@@ -56,27 +63,37 @@ const API = {
   },
 
   // ── Generate via WebSocket ────────────────────────────────────────────────────
+  // Each call gets its own socket: Txt2Img and Flux can generate at the same time. Closing the
+  // previous socket here (old behaviour) made its onclose report a bogus "server closed
+  // unexpectedly" error to the OTHER tab and reset that tab's state mid-generation.
+  _sockets: new Set(),
+
   generate(payload, { onProgress, onPreview, onImage, onDone, onError } = {}) {
-    if (this._ws) { try { this._ws.close(); } catch {} }
     const ws = new WebSocket(`${this.wsOrigin}/API/GenerateText2ImageWS`);
-    this._ws = ws;
+    this._sockets.add(ws);
+
+    // Exactly one terminal callback per generation (done could fire from msg.done AND onclose)
+    let finished = false;
+    const finish = (err) => {
+      if (finished) return;
+      finished = true;
+      if (err !== undefined) onError?.(err); else onDone?.();
+    };
 
     ws.onopen = () => {
       ws.send(JSON.stringify({ session_id: this.session, ...payload }));
     };
-    let gotError = false;
-    let gotDone  = false;
     let gotImage = false;
     ws.onmessage = e => {
       let msg;
       try { msg = JSON.parse(e.data); } catch { return; }
       if (msg.error) {
-        gotError = true; onError?.(msg.error); ws.close(); return;
+        finish(msg.error); ws.close(); return;
       }
       if (msg.status !== undefined) {
         const s = String(msg.status);
         if (s.toLowerCase().startsWith('error')) {
-          gotError = true; onError?.(s); ws.close(); return;
+          finish(s); ws.close(); return;
         }
         const pct = msg.overall_percent ?? msg.cur_overall_percent ?? 0;
         onProgress?.(s, pct);
@@ -87,28 +104,30 @@ const API = {
         onProgress?.(gp.status || 'Generating…', pct);
         if (gp.preview) onPreview?.(gp.preview);
       }
-      if (msg.image)  { gotImage = true; onImage?.(msg.image); }
+      // msg.metadata = the image's SwarmUI metadata (JSON string): carries the real seed used
+      if (msg.image)  { gotImage = true; onImage?.(msg.image, msg.metadata); }
       if (msg.images) {
         gotImage = true;
         const imgs = Array.isArray(msg.images) ? msg.images : Object.values(msg.images);
         imgs.forEach(i => onImage?.(i));
       }
-      if (msg.done) { gotDone = true; onDone?.(); }
+      if (msg.done) finish();
     };
-    ws.onerror = () => { gotError = true; onError?.('WebSocket error'); };
+    ws.onerror = () => finish('WebSocket error');
     ws.onclose = () => {
-      this._ws = null;
-      if (ws._interrupted) return;
-      if (gotError) return;
+      this._sockets.delete(ws);
+      // Stopped (by this tab or another one — InterruptAll stops everything): end quietly, no error
+      if (ws._interrupted) { finish(); return; }
       // SwarmUI ferme le socket après msg.image sans forcément envoyer msg.done
-      if (gotDone || gotImage) onDone?.();
-      else onError?.('Generation failed — server closed unexpectedly');
+      if (gotImage) finish();
+      else finish('Generation failed — server closed unexpectedly');
     };
     return ws;
   },
 
   interrupt() {
-    if (this._ws) { this._ws._interrupted = true; this._ws.close(); this._ws = null; }
+    this._sockets.forEach(ws => { ws._interrupted = true; try { ws.close(); } catch {} });
+    this._sockets.clear();
     return this.post('/API/InterruptAll', { session_id: this.session });
   },
 

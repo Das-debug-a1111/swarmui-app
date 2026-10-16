@@ -18,6 +18,7 @@ const Inpaint = (() => {
     drawing:          false,
     tool:             'brush',
     brushSize:        40,
+    count:            Math.max(1, Math.min(16, +localStorage.getItem('inp-count') || 1)),
     brushOpacity:     1.0,
     lastPos:          null,
     sketchCanvas:     null,
@@ -233,13 +234,18 @@ const Inpaint = (() => {
         if (!picked) return;
       }
 
+      // Simple whitespace split — fine for plain flags (--sage --fast-fp16),
+      // not meant to support quoted args with spaces.
+      const argsStr = q('inp-forge-launch-args')?.value.trim() || '';
+      const launchArgs = argsStr ? argsStr.split(/\s+/) : [];
+
       btn.textContent = '⏳ Démarrage…';
-      let res = await window.electronAPI.launchProcess('forgeLaunchScript');
+      let res = await window.electronAPI.launchProcess('forgeLaunchScript', launchArgs);
 
       if (res?.error === 'script_not_found' || res?.error === 'no_script_configured') {
         const picked = await pickScript();
         if (!picked) return;
-        res = await window.electronAPI.launchProcess('forgeLaunchScript');
+        res = await window.electronAPI.launchProcess('forgeLaunchScript', launchArgs);
       }
 
       if (res?.error) {
@@ -434,9 +440,15 @@ const Inpaint = (() => {
     bindUI();
     renderPresetList();
 
-    // Launch-Forge button only makes sense on the machine running Forge itself
-    if (window.electronAPI?.platform === 'win32' && q('inp-forge-launch')) {
+    // Launch-Forge button only makes sense inside Electron (can spawn local
+    // processes) — Forge itself can run on Windows, macOS or Linux.
+    if (window.electronAPI && q('inp-forge-launch')) {
       q('inp-forge-launch').style.display = '';
+      q('inp-forge-launch-args').style.display = '';
+      q('inp-forge-launch-args-hint').style.display = '';
+      window.electronAPI.configGet().then(cfg => {
+        if (cfg?.forgeLaunchArgs) q('inp-forge-launch-args').value = cfg.forgeLaunchArgs;
+      });
     }
 
     // Instance bar
@@ -475,18 +487,59 @@ const Inpaint = (() => {
     q('inp-clear-btn').onclick  = clearMask;
     q('inp-invert-btn').onclick = invertMask;
 
-    q('inp-brush-range').oninput = function () {
-      S.brushSize = +this.value;
-      q('inp-brush-val').textContent = this.value;
+    // Taille : curseur (1–200) ou chiffre tapé (1–500), plus [ et ] au clavier. La gomme utilise la même taille.
+    const setBrushSize = (v, fromField = false) => {
+      const n = Math.max(1, Math.min(500, Math.round(+v) || 1));
+      S.brushSize = n;
+      q('inp-brush-range').value = Math.min(n, 200);
+      if (!fromField) q('inp-brush-val').value = n;
     };
+    q('inp-brush-range').oninput = function () { setBrushSize(this.value); };
+
+    // Nombre d'images : 1/2/4/8 + autre (comme Txt2Img)
+    const syncCount = () => {
+      const custom = ![1, 2, 4, 8].includes(S.count);
+      document.querySelectorAll('#inp-seg-count button').forEach(b => b.classList.toggle('active', +b.dataset.v === S.count));
+      q('inpaint-count-custom').classList.toggle('active', custom);
+      if (custom) q('inpaint-count-custom').value = S.count;
+      else if (document.activeElement !== q('inpaint-count-custom')) q('inpaint-count-custom').value = '';
+    };
+    const setCount = v => {
+      S.count = Math.max(1, Math.min(16, parseInt(v, 10) || 1));
+      localStorage.setItem('inp-count', S.count);
+      syncCount();
+    };
+    document.querySelectorAll('#inp-seg-count button').forEach(b => b.addEventListener('click', () => { q('inpaint-count-custom').value = ''; setCount(b.dataset.v); }));
+    q('inpaint-count-custom').addEventListener('change', e => { if (e.target.value !== '') setCount(e.target.value); });
+    q('inpaint-count-custom').addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); });
+    S.setCount = setCount;   // pour les presets / instances
+    syncCount();
+    q('inp-brush-val').oninput   = function () { if (+this.value >= 1) setBrushSize(this.value, true); };
+    q('inp-brush-val').onchange  = function () { setBrushSize(this.value); };
+    document.addEventListener('keydown', e => {
+      if (!q('view-inpaint').classList.contains('active') || (e.key !== '[' && e.key !== ']')) return;
+      const a = document.activeElement;
+      if (a && (a.tagName === 'TEXTAREA' || a.tagName === 'INPUT' && a.type === 'text')) return;
+      e.preventDefault();
+      const step = S.brushSize < 20 ? 2 : S.brushSize < 100 ? 5 : 10;
+      setBrushSize(S.brushSize + (e.key === ']' ? step : -step));
+    });
     q('inp-opacity-range').oninput = function () {
       const c = q('inp-c-mask');
       if (c) c.style.opacity = this.value / 100;
     };
     q('inp-brush-opacity').oninput = function () {
       S.brushOpacity = this.value / 100;
-      q('inp-brush-opacity-val').textContent = this.value;
+      q('inp-brush-opacity-val').value = this.value;
     };
+    q('inp-brush-opacity-val').onchange = function () {
+      const n = Math.max(1, Math.min(100, Math.round(+this.value) || 100));
+      this.value = n;
+      q('inp-brush-opacity').value = n;
+      S.brushOpacity = n / 100;
+    };
+    // Entrée dans un champ chiffré = valider et rendre la main au canevas
+    ['inp-brush-val', 'inp-brush-opacity-val'].forEach(id => q(id).addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); }));
 
     // File loading
     q('inp-toolbar-load').onclick = () => q('inp-file-input').click();
@@ -543,20 +596,7 @@ const Inpaint = (() => {
       r.onchange = () => {};
     });
 
-    // Paste
-    document.addEventListener('paste', e => {
-      if (!q('view-inpaint').classList.contains('active')) return;
-      const items = e.clipboardData?.items;
-      if (!items) return;
-      for (const item of items) {
-        if (item.type.startsWith('image/')) {
-          e.preventDefault();
-          const file = item.getAsFile();
-          if (file) loadFile(file);
-          break;
-        }
-      }
-    });
+    // Coller une image (⌘V) : géré pour toutes les zones par src/pasteTargets.js
 
     // Presets
     q('inpp-preset-save').onclick = savePreset;
@@ -594,6 +634,9 @@ const Inpaint = (() => {
     });
     q('inp-forge-reconnect')?.addEventListener('click', connectForge);
     q('inp-forge-launch')?.addEventListener('click', launchForge);
+    q('inp-forge-launch-args')?.addEventListener('change', function () {
+      window.electronAPI?.configSet('forgeLaunchArgs', this.value.trim());
+    });
     q('inp-free-swarm-vram')?.addEventListener('click', async () => {
       setStatus('Libération VRAM SwarmUI…');
       try {
@@ -835,7 +878,13 @@ const Inpaint = (() => {
       mask:   S.maskCtx.getImageData(0, 0, S.maskCanvas.width, S.maskCanvas.height),
       sketch: S.sketchCtx ? S.sketchCtx.getImageData(0, 0, S.sketchCanvas.width, S.sketchCanvas.height) : null,
     });
-    if (S.undoStack.length > 30) S.undoStack.shift();
+    // Full-size RGBA frames (mask + sketch): also capped by total bytes, not just by count —
+    // 30 steps at 4096² is ~4 GB and used to crash the renderer.
+    const bytes = f => f.mask.data.length + (f.sketch ? f.sketch.data.length : 0);
+    let total = S.undoStack.reduce((n, f) => n + bytes(f), 0);
+    while (S.undoStack.length > 1 && (S.undoStack.length > 30 || total > 192 * 1024 * 1024)) {
+      total -= bytes(S.undoStack.shift());
+    }
   }
 
   function undo() {
@@ -1042,7 +1091,10 @@ const Inpaint = (() => {
   function getPresets() {
     try { return JSON.parse(localStorage.getItem(PRESET_KEY) || '{}'); } catch { return {}; }
   }
-  function savePresetsData(obj) { localStorage.setItem(PRESET_KEY, JSON.stringify(obj)); }
+  function savePresetsData(obj) {
+    try { localStorage.setItem(PRESET_KEY, JSON.stringify(obj)); return true; }
+    catch (e) { showErrorToast(`Preset non sauvegardé (stockage plein) : ${e.message}`); return false; }
+  }
 
   function collectSettings() {
     return {
@@ -1069,6 +1121,7 @@ const Inpaint = (() => {
       w:            q('inp-w').value,
       h:            q('inp-h').value,
       loras:        collectInpLoras(),
+      count:        S.count,
     };
   }
 
@@ -1079,6 +1132,7 @@ const Inpaint = (() => {
       if (valId && q(valId)) q(valId).textContent = (+v).toFixed(dec);
     };
     if (p.model  !== undefined && q('inp-sel-model')) q('inp-sel-model').value = p.model;
+    if (p.count) S.setCount?.(p.count);
     if (p.prompt !== undefined) q('inp-prompt').value = p.prompt;
     if (p.neg    !== undefined) q('inp-neg').value    = p.neg;
     setSl('inp-denoise', 'inp-denoise-val', p.denoise, 2);
@@ -1188,6 +1242,9 @@ const Inpaint = (() => {
 
     let pollId = null;
 
+    // Image de départ telle qu'au lancement (pour l'avant/après, même si une autre image est chargée entre-temps)
+    const beforeSrc = S.imageData || S.image.src;
+
     try {
       // ── Export full-res image & mask ──────────────────────────────────────
       const imgC = document.createElement('canvas');
@@ -1244,7 +1301,10 @@ const Inpaint = (() => {
         height:                   +q('inp-h').value,
         sampler_name:             q('inp-sampler').value || 'DPM++ 2M',
         denoising_strength:       +q('inp-denoise').value,
-        override_settings: { sd_model_checkpoint: q('inp-sel-model').value },
+        // Plusieurs images = plusieurs passes (n_iter) plutôt qu'un gros batch : même VRAM qu'une seule image
+        n_iter:     S.count,
+        batch_size: 1,
+        override_settings: { sd_model_checkpoint: q('inp-sel-model').value, return_grid: false },
         override_settings_restore_afterwards: false,
         send_images:  true,
         save_images:  false,
@@ -1312,11 +1372,12 @@ const Inpaint = (() => {
       setProgress(100);
       setStatus('✅ Done');
 
-      const resultB64 = data.images?.[0];
-      if (!resultB64) throw new Error('No image in Forge response');
+      // Forge ajoute une grille en tête quand il y a plusieurs images : on garde les N dernières
+      const images = (data.images || []).slice(-S.count);
+      if (!images.length) throw new Error('No image in Forge response');
 
-      // Forge handles compositing (inpaint_full_res) — just show the result
-      await showResult(`data:image/png;base64,${resultB64}`);
+      // Forge handles compositing (inpaint_full_res) — just show the results
+      for (const b64 of images) await showResult(`data:image/png;base64,${b64}`, beforeSrc);
 
     } catch (err) {
       if (pollId) { clearInterval(pollId); pollId = null; }
@@ -1358,18 +1419,17 @@ const Inpaint = (() => {
     if (el) el.remove();
   }
 
-  async function showResult(imgData) {
+  async function showResult(imgData, beforeSrc) {
     const src = imgData.startsWith('data:') ? imgData
               : imgData.startsWith('http')  ? imgData
               : `http://${API.host}/${imgData.replace(/^\//, '')}`;
+    const card = document.createElement('div');
+    card.className = 'inp-res';
     const img = document.createElement('img');
     img.src   = src;
-    img.title = 'Click to open fullscreen';
-    img.onclick = () => {
-      const lb = document.getElementById('lightbox');
-      const lbImg = document.getElementById('lightbox-img');
-      if (lb && lbImg) { lbImg.src = src; lb.classList.remove('hidden'); }
-    };
+    img.title = 'Clic : plein écran — clic droit : plus d\'options';
+    // Plein écran, avec ← → pour passer d'un résultat à l'autre
+    img.onclick = () => openLightbox(src, 'inp-results', '.inp-res > img');
     img.addEventListener('contextmenu', e => {
       e.preventDefault();
       const ctxMenu = q('inp-ctx-menu');
@@ -1379,8 +1439,50 @@ const Inpaint = (() => {
       ctxMenu.style.top  = Math.min(e.clientY, window.innerHeight - 60)  + 'px';
       ctxMenu.classList.add('open');
     });
-    q('inp-results').prepend(img);
+    const actions = document.createElement('div');
+    actions.className = 'inp-res-actions';
+    actions.innerHTML = `${beforeSrc ? '<button data-a="cmp" title="Comparer avec l\'image de départ">⇄ Avant/après</button>' : ''}
+      <button data-a="use" title="Continuer à retoucher ce résultat">↺ Retoucher</button>
+      <button data-a="dl" title="Télécharger">⬇</button>`;
+    actions.querySelector('[data-a="cmp"]')?.addEventListener('click', e => { e.stopPropagation(); openCompare(beforeSrc, src); });
+    actions.querySelector('[data-a="use"]').addEventListener('click', e => { e.stopPropagation(); loadFromSrc(src); });
+    actions.querySelector('[data-a="dl"]').addEventListener('click', e => {
+      e.stopPropagation();
+      const a = document.createElement('a');
+      a.href = src;
+      a.download = `inpaint-${Date.now()}.png`;
+      a.click();
+    });
+    card.append(img, actions);
+    q('inp-results').prepend(card);
     if (q('inp-dl-history')) q('inp-dl-history').style.display = '';
+  }
+
+  // ── Avant / après : glisser pour révéler l'original par-dessus le résultat ─
+  function openCompare(before, after) {
+    const ov = q('inp-cmp-overlay');
+    const stage = q('inp-cmp-stage');
+    q('inp-cmp-after').src  = after;
+    q('inp-cmp-before').src = before;
+    setCompare(50);
+    ov.classList.add('open');
+    if (stage._bound) return;
+    stage._bound = true;
+    const move = e => {
+      const r = stage.getBoundingClientRect();
+      setCompare(Math.min(100, Math.max(0, (e.clientX - r.left) / r.width * 100)));
+    };
+    stage.addEventListener('pointerdown', e => { stage.setPointerCapture(e.pointerId); move(e); stage._drag = true; });
+    stage.addEventListener('pointermove', e => { if (stage._drag) move(e); });
+    ['pointerup', 'pointercancel'].forEach(ev => stage.addEventListener(ev, () => { stage._drag = false; }));
+    q('inp-cmp-close').addEventListener('click', () => ov.classList.remove('open'));
+    ov.addEventListener('click', e => { if (e.target === ov) ov.classList.remove('open'); });
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') ov.classList.remove('open'); });
+  }
+
+  function setCompare(pct) {
+    q('inp-cmp-before').style.clipPath = `inset(0 ${100 - pct}% 0 0)`;
+    q('inp-cmp-line').style.left = `calc(${pct}% - 1px)`;
   }
 
   // ── Public API ─────────────────────────────────────────────────────────────

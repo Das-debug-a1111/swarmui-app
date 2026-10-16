@@ -160,7 +160,8 @@ const ModelDL = (() => {
     const base = getBasePath();
     const sep  = window.electronAPI?.platform === 'win32' ? '\\' : '/';
     const sub  = currentSubfolder(type);
-    return [base, sub, file.name].join(sep);
+    const name = String(file.name || 'model').split(/[\\/]/).pop().replace(/^\.+/, '') || 'model';
+    return [base, sub, name].join(sep);
   }
 
   // ── Model card ───────────────────────────────────────────────────────────────
@@ -176,7 +177,7 @@ const ModelDL = (() => {
 
     // Preview images (max 5, blur nsfw)
     const previews = (version.images || []).slice(0, 5).map(img =>
-      `<img src="${img.url}" class="mdl-prev-img${img.nsfwLevel > 1 ? ' mdl-blur' : ''}"
+      `<img src="${esc(img.url)}" class="mdl-prev-img${img.nsfwLevel > 1 ? ' mdl-blur' : ''}"
             loading="lazy" alt="">`
     ).join('');
 
@@ -190,7 +191,7 @@ const ModelDL = (() => {
       `<div class="mdl-file-row${f.primary ? ' primary' : ''}">
         <span class="mdl-file-name">${esc(f.name)}</span>
         <span class="mdl-file-size">${fmtSize(f.sizeKB)}</span>
-        <span class="mdl-file-meta">${f.metadata?.fp || ''} ${f.metadata?.size || ''}</span>
+        <span class="mdl-file-meta">${esc(f.metadata?.fp || '')} ${esc(f.metadata?.size || '')}</span>
         <button class="mdl-file-dl-btn" data-file-id="${f.id}">⬇</button>
       </div>`
     ).join('');
@@ -274,7 +275,9 @@ const ModelDL = (() => {
     if (!base) { setStatus('⚠ Configure le dossier models en haut', 'error'); return; }
 
     const apiKey = getApiKey();
-    const url    = `${file.downloadUrl}${apiKey ? '?token=' + encodeURIComponent(apiKey) : ''}`;
+    const url    = apiKey
+      ? `${file.downloadUrl}${file.downloadUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(apiKey)}`
+      : file.downloadUrl;
     const dest   = destPath(file, modelType);
 
     const progWrap = q('mdl-prog-wrap');
@@ -319,15 +322,22 @@ const ModelDL = (() => {
     const base    = getBasePath() || 'D:\\path\\to\\ComfyUI\\models';
     const sub     = currentSubfolder(model.type);
     const winBase = base.replace(/\//g, '\\');
-    const url     = `${file.downloadUrl}${apiKey ? '?token=' + apiKey : ''}`;
-    const dest    = `${winBase}\\${sub}\\${file.name}`;
+    // Names come from the Civitai API and end up in a script the user pastes into cmd.exe:
+    // drop anything cmd treats specially (newline = new command, & | < > ^ % " …).
+    const cmdSafe = v => String(v ?? '').replace(/[\r\n"&|<>^%]/g, '');
+    const fileName = cmdSafe(String(file.name || 'model').split(/[\\/]/).pop());
+    // The URL sits inside "…" where & and | are literal for cmd; only a quote or a newline could escape it
+    const url     = String(apiKey
+      ? `${file.downloadUrl}${file.downloadUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(apiKey)}`
+      : file.downloadUrl).replace(/[\r\n"]/g, '');
+    const dest    = `${cmdSafe(winBase)}\\${cmdSafe(sub)}\\${fileName}`;
 
     // cmd.exe compatible — works via SSH or Command Prompt
     const script = [
-      `@rem ${model.name} — ${_version?.name || ''}`,
-      `@rem Type: ${model.type}  →  ${sub}\\`,
+      `@rem ${cmdSafe(model.name)} — ${cmdSafe(_version?.name || '')}`,
+      `@rem Type: ${cmdSafe(model.type)}  →  ${cmdSafe(sub)}\\`,
       `set "dest=${dest}"`,
-      `if not exist "${winBase}\\${sub}\\" mkdir "${winBase}\\${sub}"`,
+      `if not exist "${cmdSafe(winBase)}\\${cmdSafe(sub)}\\" mkdir "${cmdSafe(winBase)}\\${cmdSafe(sub)}"`,
       `curl.exe -L --progress-bar -o "%dest%" "${url}"`,
     ].join('\n');
 
@@ -443,7 +453,7 @@ const ModelDL = (() => {
       card.className = 'mdl-result-card';
       card.innerHTML = `
         ${img
-          ? `<img src="${img.url}" class="mdl-result-img${img.nsfwLevel > 1 ? ' mdl-blur' : ''}" loading="lazy">`
+          ? `<img src="${esc(img.url)}" class="mdl-result-img${img.nsfwLevel > 1 ? ' mdl-blur' : ''}" loading="lazy">`
           : '<div class="mdl-result-no-img">📦</div>'}
         <div class="mdl-result-name">${esc(model.name)}</div>
         <div class="mdl-result-foot">

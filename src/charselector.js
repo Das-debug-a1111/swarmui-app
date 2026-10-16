@@ -11,9 +11,11 @@ const CharSelector = (() => {
   // ── State ────────────────────────────────────────────────────────────────────
   let allChars     = [];   // [{name, series}]
   let tagAssist    = {};
-  let favorites    = new Set(JSON.parse(localStorage.getItem('cs-favs')    || '[]'));
-  let weights      = JSON.parse(localStorage.getItem('cs-weights')  || '{}');
-  let recentlyUsed = JSON.parse(localStorage.getItem('cs-recent')   || '[]');
+  // Corrupted storage must not kill the whole selector at load time
+  const readJSON = (k, def) => { try { return JSON.parse(localStorage.getItem(k)) ?? def; } catch { return def; } };
+  let favorites    = new Set(readJSON('cs-favs', []));
+  let weights      = readJSON('cs-weights', {});
+  let recentlyUsed = readJSON('cs-recent', []);
   let filtered     = [];
   let activeChars  = new Set();
   let panelOpen    = false;

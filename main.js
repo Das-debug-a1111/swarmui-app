@@ -41,7 +41,18 @@ ipcMain.handle('config:get', () => ({
   dataPath:          DATA_PATH,
   swarmLaunchScript: config.swarmLaunchScript || null,
   forgeLaunchScript: config.forgeLaunchScript || null,
+  forgeLaunchArgs:   config.forgeLaunchArgs   || '',
 }));
+
+// Small allowlist, not a fully generic setter — keeps the IPC surface
+// intentional even though this renderer is fully trusted (no remote content).
+const SETTABLE_CONFIG_KEYS = new Set(['forgeLaunchArgs']);
+ipcMain.handle('config:set', (_, key, value) => {
+  if (!SETTABLE_CONFIG_KEYS.has(key)) return { error: 'not_settable' };
+  config[key] = value;
+  saveConfig(config);
+  return { ok: true };
+});
 
 ipcMain.handle('config:pickDataFolder', async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog({
@@ -130,7 +141,22 @@ ipcMain.handle('models:pickFolder', async () => {
 });
 
 // Download a file from URL → destPath, sending progress events back
+// The renderer builds destPath from the Civitai API's file name: never let it write outside a
+// model folder or create anything but a model file (e.g. overwrite ~/.zshrc via "../").
+const MODEL_FILE_EXT = new Set(['.safetensors', '.sft', '.ckpt', '.pt', '.pth', '.bin', '.gguf', '.onnx', '.zip']);
+function checkDownload(url, destPath) {
+  let u;
+  try { u = new URL(url); } catch { return 'URL invalide'; }
+  if (u.protocol !== 'https:') return 'Seuls les téléchargements https sont autorisés';
+  if (typeof destPath !== 'string' || !path.isAbsolute(destPath)) return 'Chemin de destination invalide';
+  if (destPath.split(/[\\/]/).includes('..')) return 'Chemin de destination invalide (..)';
+  if (!MODEL_FILE_EXT.has(path.extname(destPath).toLowerCase())) return `Type de fichier refusé : ${path.extname(destPath) || '(aucune extension)'}`;
+  return null;
+}
+
 ipcMain.handle('models:download', async (event, { url, destPath }) => {
+  const invalid = checkDownload(url, destPath);
+  if (invalid) throw new Error(invalid);
   // Ensure directory exists
   fsSync.mkdirSync(path.dirname(destPath), { recursive: true });
 
@@ -151,6 +177,12 @@ ipcMain.handle('models:download', async (event, { url, destPath }) => {
       const totalBytes = parseInt(res.headers['content-length'] || '0', 10);
       let downloadedBytes = 0;
       const file = fsSync.createWriteStream(tmpPath);
+      // Disk full / permission denied: fail the download instead of leaving the promise hanging
+      file.on('error', (err) => {
+        try { req.abort(); } catch {}
+        try { fsSync.unlinkSync(tmpPath); } catch {}
+        reject(err);
+      });
 
       res.on('data', (chunk) => {
         file.write(chunk);
@@ -192,12 +224,20 @@ ipcMain.handle('models:download', async (event, { url, destPath }) => {
 // 'forgeLaunchScript') and doubles as the running-process registry key.
 const launchedProcesses = {};
 
+// Only these config entries hold launch scripts; anything else would let the renderer
+// overwrite / execute arbitrary config values.
+const LAUNCH_KEYS = new Set(['swarmLaunchScript', 'forgeLaunchScript']);
+// The command line goes through a shell (shell:true), so each arg must be a plain token:
+// no & | ; < > $ ` " ' ( ) or newlines that would chain another command.
+const SAFE_ARG = /^[A-Za-z0-9_@+=:,.\/\\-]+$/;
+
 ipcMain.handle('launcher:pickScript', async (_, key, dialogTitle, dialogMessage) => {
+  if (!LAUNCH_KEYS.has(key)) return null;
   const { canceled, filePaths } = await dialog.showOpenDialog({
     title:       dialogTitle,
     message:     dialogMessage,
     properties:  ['openFile'],
-    filters:     [{ name: 'Batch script', extensions: ['bat', 'cmd'] }],
+    filters:     [{ name: 'Launch script', extensions: ['bat', 'cmd', 'sh', 'command'] }],
   });
   if (canceled || !filePaths.length) return null;
 
@@ -207,6 +247,10 @@ ipcMain.handle('launcher:pickScript', async (_, key, dialogTitle, dialogMessage)
 });
 
 ipcMain.handle('launcher:launch', (_, key, args = []) => {
+  if (!LAUNCH_KEYS.has(key)) return { error: 'unknown_launcher' };
+  if (!Array.isArray(args)) args = [];
+  const badArg = args.find(a => typeof a !== 'string' || !SAFE_ARG.test(a));
+  if (badArg !== undefined) return { error: `Argument refusé (caractères spéciaux) : ${String(badArg).slice(0, 40)}` };
   const running = launchedProcesses[key];
   if (running && running.exitCode === null) return { ok: true, alreadyRunning: true };
 
@@ -230,8 +274,12 @@ ipcMain.handle('launcher:launch', (_, key, args = []) => {
 
     // Build one command string ourselves — passing `args` alongside shell:true
     // makes Node concatenate them unescaped and emit a deprecation warning.
-    const quotedArgs = args.map(a => /\s/.test(a) ? `"${a}"` : a).join(' ');
-    const commandLine = quotedArgs ? `${path.basename(scriptPath)} ${quotedArgs}` : path.basename(scriptPath);
+    // cmd.exe searches cwd for a bare filename by default (Windows); POSIX
+    // shells don't, so a bare basename would fail with "command not found"
+    // on macOS/Linux — prefix with ./ there.
+    const base = (process.platform === 'win32' ? '' : './') + path.basename(scriptPath);
+    const quotedArgs = args.join(' ');
+    const commandLine = quotedArgs ? `${base} ${quotedArgs}` : base;
 
     const proc = spawn(commandLine, [], {
       cwd:      path.dirname(scriptPath),
@@ -264,11 +312,35 @@ function createWindow() {
     show: false,
   });
 
+  // A grey/blank window means the renderer process died (usually out of memory). Log why, and
+  // reload by itself instead of leaving the user staring at nothing — the Comic tab restores its
+  // pages from its autosave on reload. Capped so a crash loop at startup can't spin forever.
+  const crashLog = path.join(app.getPath('userData'), 'crash.log');
+  const logCrash = msg => { try { fsSync.appendFileSync(crashLog, `[${new Date().toISOString()}] ${msg}\n`); } catch {} };
+  let recentReloads = [];
+  win.webContents.on('render-process-gone', (_e, details) => {
+    logCrash(`renderer gone: reason=${details.reason} exitCode=${details.exitCode}`);
+    if (details.reason === 'clean-exit') return;
+    const now = Date.now();
+    recentReloads = recentReloads.filter(t => now - t < 60000);
+    if (recentReloads.length >= 3 || win.isDestroyed()) return;
+    recentReloads.push(now);
+    setTimeout(() => { if (!win.isDestroyed()) win.webContents.reload(); }, 400);
+  });
+  win.webContents.on('unresponsive', () => logCrash('renderer unresponsive'));
+  win.webContents.on('responsive',   () => logCrash('renderer responsive again'));
+
   win.loadFile('index.html');
   win.once('ready-to-show', () => win.show());
   win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
     return { action: 'deny' };
+  });
+  // Dropping an image/file outside a drop zone made Chromium navigate the whole window to it
+  // (the app "disappeared" until reload). The app is a single page: block every navigation.
+  win.webContents.on('will-navigate', (e, url) => {
+    e.preventDefault();
+    if (/^https?:\/\//i.test(url)) shell.openExternal(url);
   });
 }
 
@@ -299,6 +371,10 @@ app.whenReady().then(() => {
   });
   createWindow();
   if (app.isPackaged) autoUpdater.checkForUpdates().catch(() => {});
+});
+
+app.on('child-process-gone', (_e, details) => {
+  try { fsSync.appendFileSync(path.join(app.getPath('userData'), 'crash.log'), `[${new Date().toISOString()}] ${details.type} process gone: reason=${details.reason}\n`); } catch {}
 });
 
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

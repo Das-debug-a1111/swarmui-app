@@ -114,12 +114,42 @@ const Comic = (() => {
   }
 
   // ── Undo/redo ─────────────────────────────────────────────────────────────
+  // Undo snapshots must NOT embed the panel images: a panel's imageDataUrl is a multi-MB base64
+  // string and JSON.stringify copied it into every one of the (up to 50 per page) snapshots —
+  // 25 trivial edits on a page with ~28 MB of images took the JS heap from 40 MB to 1.9 GB, which
+  // is what turned the window grey (renderer out of memory). Snapshots store a short key instead;
+  // the single real copy of each image lives in IMG_URL_BY_KEY, and its decoded <img> in IMG_EL_BY_URL.
+  const IMG_KEY_BY_URL = new Map();
+  const IMG_URL_BY_KEY = new Map();
+  const IMG_EL_BY_URL  = new Map();
+  let imgSeq = 0;
+
+  function internImage(url) {
+    let key = IMG_KEY_BY_URL.get(url);
+    if (!key) {
+      key = '@img:' + (++imgSeq);
+      IMG_KEY_BY_URL.set(url, key);
+      IMG_URL_BY_KEY.set(key, url);
+    }
+    return key;
+  }
+  function snapshotObject({ _img, ...rest }) {
+    if (rest.imageDataUrl) rest.imageDataUrl = internImage(rest.imageDataUrl);
+    return rest;
+  }
+  function expandObject(o) {
+    if (typeof o.imageDataUrl === 'string' && o.imageDataUrl.startsWith('@img:')) {
+      o.imageDataUrl = IMG_URL_BY_KEY.get(o.imageDataUrl) ?? null;
+    }
+    return o;
+  }
+
   function projectSnapshotJSON() {
     return JSON.stringify({
       canvasWidth:  S.project.canvasWidth,
       canvasHeight: S.project.canvasHeight,
       background:   S.project.background,
-      objects:      S.project.objects.map(({ _img, ...rest }) => rest),
+      objects:      S.project.objects.map(snapshotObject),
     });
   }
   // Undo/redo is per-page: switching pages must not shift the history of the
@@ -141,7 +171,7 @@ const Comic = (() => {
     S.project.canvasWidth  = d.canvasWidth;
     S.project.canvasHeight = d.canvasHeight;
     S.project.background   = d.background;
-    S.project.objects      = d.objects;
+    S.project.objects      = d.objects.map(expandObject);
     S.selectedId = null;
     preloadImages();
     resizeCanvasElement();
@@ -167,13 +197,27 @@ const Comic = (() => {
     S.pages.forEach(page => {
       page.objects.forEach(obj => {
         if (obj.type === 'panel' && obj.imageDataUrl && !obj._img) {
-          const img = new Image();
-          img.onload = () => { render(); refreshSidePanels(); };
-          img.src = obj.imageDataUrl;
+          // One decoded <img> per distinct image, shared by every panel/undo step that uses it
+          let img = IMG_EL_BY_URL.get(obj.imageDataUrl);
+          if (!img) {
+            img = new Image();
+            img.onload = scheduleSideRefresh;
+            img.src = obj.imageDataUrl;
+            IMG_EL_BY_URL.set(obj.imageDataUrl, img);
+          }
           obj._img = img;
         }
       });
     });
+  }
+
+  // N images finishing decode in a row used to trigger N full re-renders of the canvas AND of
+  // every page thumbnail; coalesce them into one per frame.
+  let sideRefreshQueued = false;
+  function scheduleSideRefresh() {
+    if (sideRefreshQueued) return;
+    sideRefreshQueued = true;
+    requestAnimationFrame(() => { sideRefreshQueued = false; S.pages.forEach(p => bumpPage(p.id)); render(); refreshSidePanels(); });
   }
 
   // ── Layout presets ────────────────────────────────────────────────────────
@@ -347,6 +391,7 @@ const Comic = (() => {
   // the main canvas or its selection state.
   function render(ctx, project) {
     const isMain = !ctx;
+    if (isMain) { scheduleAutosave(); bumpPage(S.project.id); }
     project = project || S.project;
     if (isMain) ctx = q('comic-canvas').getContext('2d');
     ctx.clearRect(0, 0, project.canvasWidth, project.canvasHeight);
@@ -967,6 +1012,108 @@ const Comic = (() => {
     else exportAllPagesZip();
   }
 
+  // ── Autosave (IndexedDB) ──────────────────────────────────────────────────
+  // The whole composition (every page, its size, panels with their images, bubbles, SFX…) is
+  // written to IndexedDB ~1.5s after the last edit and restored when the Comic tab starts, so
+  // closing/reloading Electron by accident loses nothing. localStorage is too small for the images.
+  // One record per page + one "meta" record (page order, active page): only pages that changed
+  // are rewritten, so saving stays cheap with many pages.
+  const AS = { ready: false, timer: null, savedIds: new Set(), flushing: false, again: false };
+
+  function asOpen() {
+    return new Promise((resolve, reject) => {
+      const r = indexedDB.open('swarm-comic', 1);
+      r.onupgradeneeded = () => r.result.createObjectStore('kv');
+      r.onsuccess = () => resolve(r.result);
+      r.onerror = () => reject(r.error);
+    });
+  }
+
+  // Runs `work(store)` in one transaction and resolves with whatever `work` returns once it commits
+  async function asTx(mode, work) {
+    const db = await asOpen();
+    try {
+      return await new Promise((resolve, reject) => {
+        const tx = db.transaction('kv', mode);
+        const out = work(tx.objectStore('kv'));
+        tx.oncomplete = () => resolve(out);
+        tx.onerror = tx.onabort = () => reject(tx.error);
+      });
+    } finally { db.close(); }
+  }
+
+  function serializePage(p) {
+    return {
+      id: p.id, canvasWidth: p.canvasWidth, canvasHeight: p.canvasHeight, background: p.background,
+      objects: p.objects.map(({ _img, ...rest }) => rest),
+    };
+  }
+
+  function scheduleAutosave() {
+    if (!AS.ready) return;
+    clearTimeout(AS.timer);
+    AS.timer = setTimeout(flushAutosave, 1500);
+  }
+
+  async function flushAutosave() {
+    clearTimeout(AS.timer);
+    if (!AS.ready) return;
+    if (AS.flushing) { AS.again = true; return; }
+    AS.flushing = true;
+    try {
+      const activeId = S.pages[S.activePage]?.id;
+      const ids = S.pages.map(p => p.id);
+      // Only the active page can have been edited since the last flush; any page we've never
+      // written (new, auto-packed, loaded…) is written too.
+      const dirty = S.pages.filter(p => p.id === activeId || !AS.savedIds.has(p.id)).map(serializePage);
+      const meta = { order: ids, activeIndex: S.activePage, nextPageId: S._nextPageId, savedAt: Date.now() };
+      await asTx('readwrite', store => {
+        dirty.forEach(p => store.put(p, 'page:' + p.id));
+        store.put(meta, 'meta');
+        store.getAllKeys().onsuccess = e => e.target.result.forEach(k => {
+          if (typeof k === 'string' && k.startsWith('page:') && !ids.includes(k.slice(5))) store.delete(k);
+        });
+      });
+      AS.savedIds = new Set(ids);
+    } catch (err) {
+      console.warn('[Comic] autosave failed:', err);
+    } finally {
+      AS.flushing = false;
+      if (AS.again) { AS.again = false; scheduleAutosave(); }
+    }
+  }
+
+  // Pages loaded from a file / replaced wholesale may reuse ids already marked as saved
+  function resetAutosaveTracking() { AS.savedIds = new Set(); }
+  // Whole project replaced (New / Load): the old images and their undo history are unreachable now
+  function resetImagePools() { IMG_KEY_BY_URL.clear(); IMG_URL_BY_KEY.clear(); IMG_EL_BY_URL.clear(); }
+
+  async function restoreAutosave() {
+    try {
+      const meta = await asTx('readonly', store => store.get('meta')).then(r => r?.result ?? null);
+      if (meta && Array.isArray(meta.order) && meta.order.length) {
+        const reqs = await asTx('readonly', store => meta.order.map(id => store.get('page:' + id)));
+        const pages = reqs.map(r => r.result).filter(Boolean);
+        const hasContent = pages.length > 1 || pages.some(p => p.objects.length);
+        if (pages.length === meta.order.length && hasContent) {
+          S.pages = pages;
+          S.histories = {};
+          S._nextPageId = Math.max(S._nextPageId, meta.nextPageId || 0,
+            ...pages.map(p => (parseInt(String(p.id).replace(/\D/g, ''), 10) || 0) + 1));
+          S.activePage = -1;
+          switchToPage(Math.min(Math.max(meta.activeIndex || 0, 0), pages.length - 1));
+          preloadImages();
+          AS.savedIds = new Set(meta.order);
+          toast(`♻ Projet restauré (${pages.length} page${pages.length > 1 ? 's' : ''})`);
+        }
+      }
+    } catch (err) {
+      console.warn('[Comic] autosave restore failed:', err);
+    } finally {
+      AS.ready = true;
+    }
+  }
+
   // ── Save / load project ───────────────────────────────────────────────────
   // v2 format: { version: 2, activePageIndex, pages: [{id,canvasWidth,canvasHeight,background,objects}, ...] }.
   // v1 (legacy, single page): { version: 1, canvasWidth, canvasHeight, background, objects } — still loadable.
@@ -1019,6 +1166,8 @@ const Comic = (() => {
         if (S.pages.some(p => p.objects.length) && !confirm('Remplacer le projet actuel ?')) return;
         S.pages = pages;
         S.histories = {};
+        resetAutosaveTracking();
+        resetImagePools();
         S.activePage = -1; // force switchToPage below to actually apply page 0
         switchToPage(Math.min(d.activePageIndex || 0, pages.length - 1));
         preloadImages();
@@ -1034,6 +1183,8 @@ const Comic = (() => {
     if (S.pages.some(p => p.objects.length) && !confirm('Nouveau projet — le projet actuel non sauvegardé sera perdu. Continuer ?')) return;
     S.pages = [{ id: genPageId(), canvasWidth: S.project.canvasWidth, canvasHeight: S.project.canvasHeight, background: '#ffffff', objects: [] }];
     S.histories = {};
+    resetAutosaveTracking();
+    resetImagePools();
     S.activePage = -1;
     switchToPage(0);
   }
@@ -1151,9 +1302,15 @@ const Comic = (() => {
     const textLike = obj.type === 'bubble' || obj.type === 'sfx' || obj.type === 'text';
     if (textLike) {
       q('comic-bubble-font').value = obj.font || (obj.type === 'sfx' ? 'Impact' : 'Arial');
-      q('comic-text-color').value = obj.textColor || (obj.type === 'sfx' ? '#ffffff' : '#000000');
-      q('comic-text-size').value = Math.round(obj.fontSize || 32);
-      q('comic-text-size-val').textContent = Math.round(obj.fontSize || 32) + 'px';
+      if (obj.type === 'sfx') {
+        q('comic-sfx-color').value = obj.textColor || '#ffffff';
+        q('comic-sfx-size').value = Math.round(obj.fontSize || 64);
+        q('comic-sfx-size-val').textContent = Math.round(obj.fontSize || 64) + 'px';
+      } else {
+        q('comic-text-color').value = obj.textColor || '#000000';
+        q('comic-text-size').value = Math.round(obj.fontSize || 32);
+        q('comic-text-size-val').textContent = Math.round(obj.fontSize || 32) + 'px';
+      }
       q('comic-fill-color').value = obj.fillColor || '#ffffff';
       q('comic-toggle-bold').classList.toggle('active', !!obj.bold);
       q('comic-toggle-italic').classList.toggle('active', !!obj.italic);
@@ -1173,9 +1330,9 @@ const Comic = (() => {
     pushUndo();
     const background = q('comic-sfx-bg').value;
     const font = q('comic-bubble-font').value;
-    const textColor = q('comic-text-color').value;
-    const fontSize = +q('comic-text-size').value;
-    const text = q('comic-sfx-preset').value || 'BOOM!';
+    const textColor = q('comic-sfx-color').value;
+    const fontSize = +q('comic-sfx-size').value;
+    const text = q('comic-sfx-preset').value || 'DRIP!';
     const w = S.project.canvasWidth * 0.28, h = S.project.canvasHeight * 0.16;
     const sfx = {
       id: genId(), type: 'sfx',
@@ -1184,7 +1341,7 @@ const Comic = (() => {
       text, font, fontSize,
       textColor, outlineColor: '#000000', outlineWidth: null,
       background, fillColor: '#ffeb3b',
-      bold: true, italic: false, underline: false,
+      bold: false, italic: true, underline: false,
     };
     S.project.objects.push(sfx);
     S.selectedId = sfx.id;
@@ -1386,7 +1543,9 @@ const Comic = (() => {
     canvas.addEventListener('dragover', e => e.preventDefault());
     canvas.addEventListener('drop', e => {
       e.preventDefault();
-      const file = e.dataTransfer.files[0];
+      // Dragged from the Auto-pack gallery (carries an id) or dropped from the OS (carries a File)
+      const galleryId = e.dataTransfer.getData(GALLERY_DND_TYPE);
+      const file = galleryId ? S.autoPack.gallery.find(x => x.id === galleryId)?.file : e.dataTransfer.files[0];
       if (!file || !file.type.startsWith('image/')) return;
       const pos = getCanvasPos(e);
       const panel = [...S.project.objects].reverse().find(o => o.type === 'panel' && hitTestObject(o, pos.x, pos.y));
@@ -1452,11 +1611,14 @@ const Comic = (() => {
       panel = S.project.objects.find(o => o.type === 'panel' && !o.imageDataUrl);
     }
     if (!panel) { toast('Tous les panels sont déjà remplis'); return; }
-    fetch(url).then(r => r.blob()).then(blob => {
+    fetch(url).then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.blob();
+    }).then(blob => {
       const r = new FileReader();
       r.onload = ev => { pushUndo(); panel.imageDataUrl = ev.target.result; delete panel._img; preloadImages(); refreshSidePanels(); };
       r.readAsDataURL(blob);
-    });
+    }).catch(err => toast(`Image non chargée dans le Comic : ${err.message}`));
   }
 
   // ── Side panels (layers + page thumbnails) ────────────────────────────────
@@ -1511,11 +1673,20 @@ const Comic = (() => {
     renderPageStrip();
   }
 
+  // Page thumbnails are cached per page and only redrawn when that page changed: the strip used to
+  // redraw EVERY page (full-size images scaled down) on each refresh, which gets very slow and
+  // memory-hungry with many pages.
+  const pageVer = new Map();     // pageId -> change counter (bumped by render() on the active page)
+  const thumbCache = new Map();  // pageId -> { ver, w, h, canvas }
+  function bumpPage(id) { pageVer.set(id, (pageVer.get(id) || 0) + 1); }
+
   function renderPageStrip() {
     const strip = q('comic-pages-strip');
     if (!strip) return;
     q('comic-export-format').style.display = S.pages.length > 1 ? '' : 'none';
     strip.innerHTML = '';
+    const liveIds = new Set(S.pages.map(p => p.id));
+    [...thumbCache.keys()].forEach(id => { if (!liveIds.has(id)) thumbCache.delete(id); });
     const THUMB_MAX = 90; // fit-to-box on BOTH dimensions — a very tall/narrow
     // page must never blow out the strip's height (that's the bug being fixed).
     S.pages.forEach((page, i) => {
@@ -1523,12 +1694,21 @@ const Comic = (() => {
       item.className = 'comic-page-thumb' + (i === S.activePage ? ' active' : '');
       item.draggable = true;
       const scale = Math.min(THUMB_MAX / page.canvasWidth, THUMB_MAX / page.canvasHeight);
-      const canvas = document.createElement('canvas');
-      canvas.width = Math.max(1, Math.round(page.canvasWidth * scale));
-      canvas.height = Math.max(1, Math.round(page.canvasHeight * scale));
-      const tctx = canvas.getContext('2d');
-      tctx.scale(scale, scale);
-      render(tctx, page);
+      const w = Math.max(1, Math.round(page.canvasWidth * scale));
+      const h = Math.max(1, Math.round(page.canvasHeight * scale));
+      const ver = pageVer.get(page.id) || 0;
+      let cached = thumbCache.get(page.id);
+      if (!cached || cached.ver !== ver || cached.w !== w || cached.h !== h) {
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const tctx = canvas.getContext('2d');
+        tctx.scale(scale, scale);
+        render(tctx, page);
+        cached = { ver, w, h, canvas };
+        thumbCache.set(page.id, cached);
+      }
+      const canvas = cached.canvas;
       const label = document.createElement('div');
       label.className = 'comic-page-thumb-label';
       label.textContent = String(i + 1);
@@ -1634,54 +1814,211 @@ const Comic = (() => {
 
   // ── Auto-pack (justified row-packing, ratios preserved, ported from the
   // user's comic_board.py) ──────────────────────────────────────────────────
-  function loadAutoPackImage(file) {
-    return new Promise(resolve => {
-      const reader = new FileReader();
-      reader.onload = e => {
-        const img = new Image();
-        img.onload = () => {
-          // Keep the already-decoded `img` around: buildAutoPackPages sets it
-          // straight onto generated panels as `_img`, so both the live
-          // preview and the real generate step draw instantly, no extra
-          // decode / no waiting on preloadImages().
-          resolve({ id: genId(), name: file.name, dataUrl: e.target.result, w: img.naturalWidth, h: img.naturalHeight, img });
-        };
-        img.src = e.target.result;
-      };
-      reader.readAsDataURL(file);
-    });
-  }
-
-  // Batched via Promise.all (mirrors inpaintScheduler.js's addFiles) so a
-  // multi-file import triggers one re-render, not one per file.
+  // Gallery cards only hold the File + a lazily-made small thumbnail: the old version read every
+  // image of the folder as a full data URL up front, which froze the tab on big folders. Full-size
+  // data/decoded image is only produced for images actually put in the queue.
   const GALLERY_DND_TYPE = 'application/x-comic-ap-gallery-id';
+  const NAT_COLLATOR = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+  const AP_UI = { search: '', sort: 'name', folder: '' };
 
-  function addAutoPackFiles(fileList) {
-    const files = [...fileList].filter(f => f.type.startsWith('image/'));
-    if (!files.length) return;
-    Promise.all(files.map(loadAutoPackImage)).then(items => {
-      S.autoPack.queue.push(...items);
-      renderAutoPackQueue();
+  function readFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = e => resolve(e.target.result);
+      r.onerror = () => reject(r.error);
+      r.readAsDataURL(file);
     });
   }
 
-  // "Ouvrir un dossier" replaces the browsable gallery with that folder's
-  // images — it does NOT add them to the queue directly. The user picks
-  // individual images from the gallery (drag or click) into the queue,
-  // choosing exactly which ones and in what order.
+  function decodeImage(src) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = src;
+    });
+  }
+
+  function makeGalleryItem(file) {
+    const path = file.webkitRelativePath || file.name;
+    const parts = path.split('/');
+    return {
+      id: genId(), name: file.name, path, file,
+      dir: parts.length > 2 ? parts.slice(1, -1).join('/') : '',
+      mtime: file.lastModified || 0,
+      url: URL.createObjectURL(file), thumb: null, w: 0, h: 0,
+    };
+  }
+
+  // Thumbnails: decoded a few at a time, only for cards that scroll into view.
+  const thumbJobs = [];
+  let thumbActive = 0;
+  let thumbObserver = null;
+
+  async function buildThumb(item) {
+    try {
+      const bmp = await createImageBitmap(item.file);
+      item.w = bmp.width; item.h = bmp.height;
+      const k = Math.min(1, 320 / Math.max(bmp.width, bmp.height));
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(bmp.width * k));
+      c.height = Math.max(1, Math.round(bmp.height * k));
+      c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+      bmp.close();
+      const blob = await new Promise(res => c.toBlob(res, 'image/jpeg', 0.82));
+      item.thumb = URL.createObjectURL(blob);
+    } catch {
+      item.thumb = item.url;
+    }
+  }
+
+  function pumpThumbs() {
+    while (thumbActive < 3 && thumbJobs.length) {
+      const { item, card } = thumbJobs.shift();
+      if (!card.isConnected) continue;
+      thumbActive++;
+      (item.thumb ? Promise.resolve() : buildThumb(item)).then(() => {
+        if (!card.isConnected) return;
+        const img = card.querySelector('img');
+        img.src = item.thumb;
+        img.classList.add('loaded');
+        card.querySelector('.comic-ap-card-dims').textContent = item.w ? `${item.w}×${item.h}` : '';
+      }).finally(() => { thumbActive--; pumpThumbs(); });
+    }
+  }
+
+  function observeCard(card, item) {
+    if (!thumbObserver) {
+      thumbObserver = new IntersectionObserver(entries => {
+        entries.forEach(en => {
+          if (!en.isIntersecting) return;
+          thumbObserver.unobserve(en.target);
+          thumbJobs.push({ item: en.target._apItem, card: en.target });
+        });
+        pumpThumbs();
+      }, { root: q('comic-ap-gallery'), rootMargin: '300px' });
+    }
+    card._apItem = item;
+    thumbObserver.observe(card);
+  }
+
+  function visibleGalleryItems() {
+    const { search, sort, folder } = AP_UI;
+    const needle = search.trim().toLowerCase();
+    const items = S.autoPack.gallery.filter(it =>
+      (!folder || it.dir === folder) && (!needle || it.path.toLowerCase().includes(needle)));
+    const byName = (a, b) => NAT_COLLATOR.compare(a.path, b.path);
+    items.sort({
+      'name': byName,
+      'name-desc': (a, b) => byName(b, a),
+      'date-desc': (a, b) => b.mtime - a.mtime || byName(a, b),
+      'date-asc': (a, b) => a.mtime - b.mtime || byName(a, b),
+    }[sort] || byName);
+    return items;
+  }
+
+  function sortedByName(files) {
+    return [...files].sort((a, b) => NAT_COLLATOR.compare(a.webkitRelativePath || a.name, b.webkitRelativePath || b.name));
+  }
+
+  // "Dossier" replaces the browsable gallery with that folder's images; nothing is read yet.
   function loadFolderGallery(fileList) {
     const files = [...fileList].filter(f => f.type.startsWith('image/'));
     if (!files.length) return;
-    Promise.all(files.map(loadAutoPackImage)).then(items => {
-      S.autoPack.gallery = items;
-      renderAutoPackGallery();
+    S.autoPack.gallery.forEach(it => { URL.revokeObjectURL(it.url); if (it.thumb && it.thumb !== it.url) URL.revokeObjectURL(it.thumb); });
+    S.autoPack.gallery = files.map(makeGalleryItem);
+    AP_UI.folder = '';
+    q('comic-ap-search').value = ''; AP_UI.search = '';
+    const dirs = [...new Set(S.autoPack.gallery.map(it => it.dir))].sort((a, b) => NAT_COLLATOR.compare(a, b));
+    const sel = q('comic-ap-folder-sel');
+    sel.innerHTML = '<option value="">📂 Tous les sous-dossiers</option>' +
+      dirs.map(d => `<option value="${esc(d)}">${esc(d || '(dossier principal)')}</option>`).join('');
+    sel.style.display = dirs.length > 1 ? '' : 'none';
+    renderAutoPackGallery();
+  }
+
+  function esc(sv) { return String(sv).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+
+  function renderAutoPackGallery() {
+    const list = q('comic-ap-gallery');
+    if (!list) return;
+    if (thumbObserver) thumbObserver.disconnect();
+    thumbJobs.length = 0;
+    list.innerHTML = '';
+    if (!S.autoPack.gallery.length) {
+      list.innerHTML = '<div class="comic-ap-empty" style="grid-column:1/-1">Ouvre un dossier pour voir ses images ici.</div>';
+      q('comic-ap-count').textContent = '';
+      return;
+    }
+    const items = visibleGalleryItems();
+    const total = S.autoPack.gallery.length;
+    q('comic-ap-count').textContent = items.length === total ? `${total} images` : `${items.length} / ${total}`;
+    if (!items.length) {
+      list.innerHTML = '<div class="comic-ap-empty" style="grid-column:1/-1">Aucune image ne correspond.</div>';
+      return;
+    }
+    const frag = document.createDocumentFragment();
+    items.forEach(item => {
+      const card = document.createElement('div');
+      card.className = 'comic-ap-card';
+      card.draggable = true;
+      card.dataset.id = item.id;
+      card.title = item.path;
+      card.innerHTML = `<img alt="" decoding="async"><span class="comic-ap-card-dims"></span><span class="comic-ap-card-count"></span><div class="comic-ap-card-name">${esc(item.name.replace(/\.[^.]+$/, ''))}</div>`;
+      card.addEventListener('click', () => addGalleryItemToQueue(item.id));
+      card.addEventListener('dragstart', e => {
+        e.dataTransfer.setData(GALLERY_DND_TYPE, item.id);
+        e.dataTransfer.effectAllowed = 'copy';
+      });
+      frag.appendChild(card);
+      observeCard(card, item);
     });
+    list.appendChild(frag);
+    updateGalleryBadges();
+  }
+
+  // Green border + "×N" on cards already in the queue, so you can see what's picked while browsing
+  function updateGalleryBadges() {
+    const counts = {};
+    S.autoPack.queue.forEach(it => { if (it.srcId) counts[it.srcId] = (counts[it.srcId] || 0) + 1; });
+    q('comic-ap-gallery').querySelectorAll('.comic-ap-card').forEach(card => {
+      const n = counts[card.dataset.id] || 0;
+      card.classList.toggle('in-queue', n > 0);
+      card.querySelector('.comic-ap-card-count').textContent = n ? '×' + n : '';
+    });
+  }
+
+  // Queue items are placed immediately (order is the point) and fully decoded in the background.
+  async function loadQueueItem(qi, file) {
+    try {
+      const dataUrl = await readFileAsDataUrl(file);
+      const img = await decodeImage(dataUrl);
+      // Keep the decoded `img`: buildAutoPackPages sets it straight onto generated panels as `_img`,
+      // so previews and the real generate step draw instantly.
+      Object.assign(qi, { dataUrl, img, w: img.naturalWidth, h: img.naturalHeight, loading: false });
+    } catch {
+      S.autoPack.queue = S.autoPack.queue.filter(x => x.id !== qi.id);
+      toast(`Image illisible ignorée : ${qi.name}`);
+    }
+    renderAutoPackQueue();
   }
 
   function addGalleryItemToQueue(galleryId) {
     const src = S.autoPack.gallery.find(x => x.id === galleryId);
     if (!src) return;
-    S.autoPack.queue.push({ id: genId(), name: src.name, dataUrl: src.dataUrl, w: src.w, h: src.h, img: src.img });
+    const qi = { id: genId(), srcId: src.id, name: src.name, thumb: src.thumb || src.url, loading: true, w: 0, h: 0, dataUrl: null, img: null };
+    S.autoPack.queue.push(qi);
+    renderAutoPackQueue();
+    loadQueueItem(qi, src.file);
+  }
+
+  function addAutoPackFiles(fileList) {
+    const files = sortedByName([...fileList].filter(f => f.type.startsWith('image/')));
+    files.forEach(file => {
+      const qi = { id: genId(), srcId: null, name: file.name, thumb: URL.createObjectURL(file), loading: true, w: 0, h: 0, dataUrl: null, img: null };
+      S.autoPack.queue.push(qi);
+      loadQueueItem(qi, file);
+    });
     renderAutoPackQueue();
   }
 
@@ -1705,50 +2042,25 @@ const Comic = (() => {
     renderAutoPackQueue();
   }
 
-  function renderAutoPackGallery() {
-    const list = q('comic-ap-gallery');
-    if (!list) return;
-    list.innerHTML = '';
-    if (!S.autoPack.gallery.length) {
-      const empty = document.createElement('div');
-      empty.className = 'comic-ap-empty';
-      empty.textContent = 'Ouvre un dossier pour voir ses images ici.';
-      list.appendChild(empty);
-      return;
-    }
-    S.autoPack.gallery.forEach(item => {
-      const el = document.createElement('div');
-      el.className = 'comic-ap-gallery-item';
-      el.draggable = true;
-      el.title = item.name;
-      el.innerHTML = `<img src="${item.dataUrl}" alt="">`;
-      el.addEventListener('click', () => addGalleryItemToQueue(item.id));
-      el.addEventListener('dragstart', e => {
-        e.dataTransfer.setData(GALLERY_DND_TYPE, item.id);
-        e.dataTransfer.effectAllowed = 'copy';
-      });
-      list.appendChild(el);
-    });
-  }
-
   function renderAutoPackQueue() {
     const list = q('comic-ap-queue');
     if (!list) return;
     list.innerHTML = '';
-    if (!S.autoPack.queue.length) {
-      const empty = document.createElement('div');
-      empty.className = 'comic-ap-empty';
-      empty.textContent = 'Aucune image dans la file — glisse-en depuis la galerie ci-dessus, ou ajoute des fichiers directement.';
-      list.appendChild(empty);
+    const queue = S.autoPack.queue;
+    q('comic-ap-qcount').textContent = queue.length ? String(queue.length) : '';
+    updateGalleryBadges();
+    if (!queue.length) {
+      list.innerHTML = '<div class="comic-ap-empty" id="comic-ap-empty">File vide — clique des images de la galerie.</div>';
       updateAutoPackDispositions();
       return;
     }
-    S.autoPack.queue.forEach((item, i) => {
+    queue.forEach((item, i) => {
       const el = document.createElement('div');
-      el.className = 'comic-ap-item';
+      el.className = 'comic-ap-item' + (item.loading ? ' loading' : '');
       el.draggable = true;
+      el.title = item.name;
       el.innerHTML = `
-        <img src="${item.dataUrl}" alt="">
+        <img src="${item.thumb}" alt="">
         <span class="comic-ap-item-order">${i + 1}</span>
         <button type="button" class="comic-ap-item-del" title="Retirer">✕</button>`;
       el.querySelector('.comic-ap-item-del').addEventListener('click', () => removeAutoPackItem(item.id));
@@ -1761,6 +2073,9 @@ const Comic = (() => {
       el.addEventListener('dragover', e => e.preventDefault());
       el.addEventListener('drop', e => {
         e.preventDefault();
+        e.stopPropagation();
+        const galleryId = e.dataTransfer.getData(GALLERY_DND_TYPE);
+        if (galleryId) { addGalleryItemToQueue(galleryId); return; }
         const draggedId = e.dataTransfer.getData('text/plain');
         if (draggedId && draggedId !== item.id) reorderAutoPackItem(draggedId, item.id);
       });
@@ -1894,11 +2209,12 @@ const Comic = (() => {
     const list = q('comic-ap-dispositions');
     if (!list) return;
     list.innerHTML = '';
-    if (!S.autoPack.queue.length) {
+    const ready = S.autoPack.queue.filter(it => !it.loading);
+    if (!ready.length) {
       S.autoPack.dispositions = [];
       const empty = document.createElement('div');
       empty.className = 'comic-ap-empty';
-      empty.textContent = 'Ajoute des images à la file pour comparer des dispositions.';
+      empty.textContent = S.autoPack.queue.length ? 'Chargement des images…' : 'Ajoute des images à la file pour comparer des dispositions.';
       list.appendChild(empty);
       return;
     }
@@ -1906,7 +2222,7 @@ const Comic = (() => {
     const innerWidth = baseOpts.width - 2 * baseOpts.margin;
     S.autoPack.dispositions = AUTOPACK_DISPOSITIONS.map(def => ({
       def,
-      pages: buildAutoPackPages(S.autoPack.queue, { ...baseOpts, rowHeightTarget: innerWidth * def.factor }),
+      pages: buildAutoPackPages(ready, { ...baseOpts, rowHeightTarget: innerWidth * def.factor }),
     }));
     if (S.autoPack.selectedIndex == null || S.autoPack.selectedIndex >= S.autoPack.dispositions.length) {
       S.autoPack.selectedIndex = 1; // Équilibré by default
@@ -1938,27 +2254,34 @@ const Comic = (() => {
     });
   }
 
-  function openAutoPackModal() {
-    q('comic-ap-width').value = S.project.canvasWidth;
-    q('comic-ap-maxheight').value = S.project.canvasHeight;
-    q('comic-autopack-overlay').classList.add('open');
-    updateAutoPackDispositions();
-  }
-
-  function closeAutoPackModal() {
-    q('comic-autopack-overlay').classList.remove('open');
+  // Docked panel: stays open between generations so the folder gallery is always at hand
+  // while composing the next pages (it used to be a modal to reopen every time).
+  function setAutoPackPanelOpen(open) {
+    q('comic-ap-panel').classList.toggle('hidden', !open);
+    q('comic-btn-autopack').classList.toggle('active', open);
+    try { localStorage.setItem('comic-ap-open', open ? '1' : ''); } catch {}
+    if (open) {
+      if (!S.autoPack.queue.length) {
+        q('comic-ap-width').value = S.project.canvasWidth;
+        q('comic-ap-maxheight').value = S.project.canvasHeight;
+      }
+      updateAutoPackDispositions();
+    }
+    resizeCanvasElement();
+    render();
   }
 
   function generateAutoPack() {
-    if (!S.autoPack.queue.length) { toast('Ajoute au moins une image'); return; }
+    const queue = S.autoPack.queue;
+    if (!queue.length) { toast('Ajoute au moins une image'); return; }
+    if (queue.some(it => it.loading)) { toast('Images en cours de chargement…'); return; }
     const chosen = S.autoPack.dispositions[S.autoPack.selectedIndex];
-    const newPages = chosen ? chosen.pages : buildAutoPackPages(S.autoPack.queue, readAutoPackOptions());
+    const newPages = chosen ? chosen.pages : buildAutoPackPages(queue, readAutoPackOptions());
     S.pages.push(...newPages);
     preloadImages();
     S.activePage = -1; // force switchToPage to actually apply even if the index is unchanged
     switchToPage(S.pages.length - newPages.length);
     clearAutoPackQueue();
-    closeAutoPackModal();
     toast(`✅ ${newPages.length} page${newPages.length > 1 ? 's' : ''} générée${newPages.length > 1 ? 's' : ''}`);
   }
 
@@ -1995,12 +2318,22 @@ const Comic = (() => {
     });
     q('comic-text-color').addEventListener('input', function () {
       const sel = S.selectedId && findObject(S.selectedId);
-      if (sel && (sel.type === 'bubble' || sel.type === 'sfx' || sel.type === 'text')) { sel.textColor = this.value; render(); }
+      if (sel && (sel.type === 'bubble' || sel.type === 'text')) { sel.textColor = this.value; render(); }
     });
     q('comic-text-size').addEventListener('input', function () {
       q('comic-text-size-val').textContent = this.value + 'px';
       const sel = S.selectedId && findObject(S.selectedId);
-      if (sel && (sel.type === 'bubble' || sel.type === 'sfx' || sel.type === 'text')) { sel.fontSize = +this.value; render(); }
+      if (sel && (sel.type === 'bubble' || sel.type === 'text')) { sel.fontSize = +this.value; render(); }
+    });
+    // SFX have their own size + color (independent from bubbles / free text)
+    q('comic-sfx-color').addEventListener('input', function () {
+      const sel = S.selectedId && findObject(S.selectedId);
+      if (sel && sel.type === 'sfx') { sel.textColor = this.value; render(); }
+    });
+    q('comic-sfx-size').addEventListener('input', function () {
+      q('comic-sfx-size-val').textContent = this.value + 'px';
+      const sel = S.selectedId && findObject(S.selectedId);
+      if (sel && sel.type === 'sfx') { sel.fontSize = +this.value; render(); }
     });
     q('comic-fill-color').addEventListener('input', function () {
       const sel = S.selectedId && findObject(S.selectedId);
@@ -2057,9 +2390,15 @@ const Comic = (() => {
     q('comic-btn-undo').addEventListener('click', undo);
     q('comic-btn-redo').addEventListener('click', redo);
     q('comic-add-page').addEventListener('click', addPage);
-    q('comic-btn-autopack').addEventListener('click', openAutoPackModal);
-    q('comic-ap-close').addEventListener('click', closeAutoPackModal);
-    q('comic-ap-cancel').addEventListener('click', closeAutoPackModal);
+    q('comic-btn-autopack').addEventListener('click', () => setAutoPackPanelOpen(q('comic-ap-panel').classList.contains('hidden')));
+    q('comic-ap-close').addEventListener('click', () => setAutoPackPanelOpen(false));
+    q('comic-ap-search').addEventListener('input', e => { AP_UI.search = e.target.value; renderAutoPackGallery(); });
+    q('comic-ap-sort').addEventListener('change', e => { AP_UI.sort = e.target.value; renderAutoPackGallery(); });
+    q('comic-ap-folder-sel').addEventListener('change', e => { AP_UI.folder = e.target.value; renderAutoPackGallery(); });
+    const apSettings = q('comic-ap-settings');
+    try { apSettings.open = !!localStorage.getItem('comic-ap-settings-open'); } catch {}
+    apSettings.addEventListener('toggle', () => { try { localStorage.setItem('comic-ap-settings-open', apSettings.open ? '1' : ''); } catch {} });
+    q('comic-ap-thumb-size').addEventListener('input', e => { q('comic-ap-gallery').style.setProperty('--ap-card', e.target.value + 'px'); });
     q('comic-ap-generate').addEventListener('click', generateAutoPack);
     q('comic-ap-btn-folder').addEventListener('click', () => q('comic-ap-file-folder').click());
     q('comic-ap-btn-files').addEventListener('click', () => q('comic-ap-file-files').click());
@@ -2130,10 +2469,19 @@ const Comic = (() => {
     if (S.initialized) return;
     S.initialized = true;
     bindUI();
+    q('comic-sfx-size-val').textContent = q('comic-sfx-size').value + 'px';
     resizeCanvasElement();
     render();
     refreshSidePanels();
     loadSystemFonts();
+    restoreAutosave().then(() => {
+      let wasOpen = false;
+      try { wasOpen = !!localStorage.getItem('comic-ap-open'); } catch {}
+      if (wasOpen) setAutoPackPanelOpen(true);
+    });
+    // Best effort when the window is closed/hidden before the debounce fires
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushAutosave(); });
+    window.addEventListener('beforeunload', () => { flushAutosave(); });
   }
 
   function onShow() {

@@ -41,6 +41,23 @@ const TagComplete = (() => {
     DB.sort((a, b) => b.count - a.count);
   }
 
+  // Recherche exacte d'un tag (ou d'un de ses alias) dans le CSV chargé → { name, count } ou null.
+  // Index reconstruit seulement quand la base change (sa taille sert de clé).
+  let _index = null, _indexSize = -1;
+  function tagInfo(name) {
+    if (_indexSize !== DB.length) {
+      _index = new Map();
+      for (const t of DB) {
+        const key = t.lower.replace(/ /g, '_');
+        if (!_index.has(key)) _index.set(key, t);
+        for (const a of t.aliases) { const ak = a.toLowerCase().replace(/ /g, '_'); if (!_index.has(ak)) _index.set(ak, t); }
+      }
+      _indexSize = DB.length;
+    }
+    const t = _index.get(String(name).toLowerCase().replace(/ /g, '_'));
+    return t ? { name: t.name, count: t.count } : null;
+  }
+
   function recentScore(name) {
     const i = recentlyUsed.indexOf(name);
     return i === -1 ? 0 : (30 - i);
@@ -488,8 +505,10 @@ const TagComplete = (() => {
     loadRecent();
     buildDB();
 
-    // Attach to all prompt textareas (Txt2Img, Inpaint, Scheduler)
-    ['inp-positive', 'inp-negative', 'inp-prompt', 'inp-neg', 'sws-f-prompt', 'sws-f-neg'].forEach(id => {
+    // Attach to all prompt textareas (Txt2Img, Inpaint, Scheduler, Inpaint par lot, Edit, Twitter).
+    // Les champs créés à la volée (prompts par masque) appellent TagComplete.attach() eux-mêmes.
+    ['inp-positive', 'inp-negative', 'inp-prompt', 'inp-neg', 'sws-f-prompt', 'sws-f-neg',
+     'ips-prompt', 'ips-neg', 'flux-inp-positive', 'flux-inp-negative', 'tw-prompt', 'tw-neg'].forEach(id => {
       const el = document.getElementById(id);
       if (el) attach(el);
     });
@@ -505,5 +524,5 @@ const TagComplete = (() => {
     return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
-  return { init, mergeExtra, parseCSV, clearModelCache: () => { delete _modelCache.lora; delete _modelCache.embed; delete _modelCache.preset; } };
+  return { init, attach, tagInfo, hasDB: () => DB.length > 0, mergeExtra, parseCSV, clearModelCache: () => { delete _modelCache.lora; delete _modelCache.embed; delete _modelCache.preset; } };
 })();
