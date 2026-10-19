@@ -331,7 +331,7 @@ const Inpaint = (() => {
   function collectInpLoras() {
     return [...(q('inp-lora-list')?.querySelectorAll('.inp-lora-row') || [])].map(row => ({
       name:   row.querySelector('.inp-lora-sel').value,
-      weight: +row.querySelector('.inp-lora-weight').value || 0.8,
+      weight: Number.isNaN(parseFloat(row.querySelector('.inp-lora-weight').value)) ? 0.8 : parseFloat(row.querySelector('.inp-lora-weight').value),
     })).filter(l => l.name);
   }
 
@@ -921,6 +921,7 @@ const Inpaint = (() => {
 
   // ── Image load ─────────────────────────────────────────────────────────────
   function loadFile(file) {
+    S.originalMetadata = null;
     const reader = new FileReader();
     reader.onload = e => {
       const img = new Image();
@@ -936,10 +937,11 @@ const Inpaint = (() => {
     if (src.startsWith('data:')) {
       const img = new Image();
       img.onload = () => { S.image = img; S.imageData = src; setupCanvas(img); setStatus(''); };
+      img.onerror = () => setStatus('❌ Image illisible');
       img.src = src;
     } else {
       fetch(src)
-        .then(r => r.blob())
+        .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.blob(); })
         .then(async blob => {
           // Parse metadata from binary
           try {
@@ -1011,6 +1013,7 @@ const Inpaint = (() => {
         .then(dataUrl => {
           const img = new Image();
           img.onload = () => { S.image = img; S.imageData = dataUrl; setupCanvas(img); setStatus(''); };
+          img.onerror = () => setStatus('❌ Image illisible');
           img.src = dataUrl;
         })
         .catch(err => setStatus(`❌ ${err.message}`));
@@ -1171,7 +1174,7 @@ const Inpaint = (() => {
     if (!sel) return;
     const presets = getPresets();
     sel.innerHTML = '<option value="">— Select —</option>' +
-      Object.keys(presets).sort().map(n => `<option value="${n}">${n}</option>`).join('');
+      Object.keys(presets).sort().map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
   }
 
   function savePreset() {
@@ -1387,11 +1390,13 @@ const Inpaint = (() => {
       } else {
         setStatus(`❌ ${err.message}`);
         console.error('[Inpaint/Forge]', err);
-        // Forge a peut-être planté — marquer offline et tenter une reconnexion
-        S.forgeOnline = false;
-        setForgeIndicator(false);
-        showOffline();
-        connectForge(); // reconnexion silencieuse en arrière-plan
+        // Panne réseau (Forge planté) : offline + reconnexion ; une erreur HTTP applicative laisse Forge en ligne
+        if (err instanceof TypeError) {
+          S.forgeOnline = false;
+          setForgeIndicator(false);
+          showOffline();
+          connectForge().then(() => setStatus(`❌ ${err.message}`));
+        }
       }
     }
 

@@ -379,8 +379,9 @@ const Scheduler = (() => {
 
   async function loadTaskPreset(id) {
     const preset = S.taskPresets.find(p => p.id === id);
-    if (!preset) return;
+    if (!preset || queueBusy()) return;
     if (S.tasks.length && !await uiConfirm({ title: `Charger « ${preset.name} » ?`, html: '<p>La file actuelle sera remplacée.</p>', okLabel: 'Charger' })) return;
+    if (queueBusy()) return;
     S.nextId = 1;
     S.tasks  = preset.tasks.map(t => makeTask(t));
     save(); render(); closeTaskPresetsModal();
@@ -462,7 +463,7 @@ const Scheduler = (() => {
     el('sws-f-prompt').value   = pm.prompt         || '';
     el('sws-f-neg').value      = pm.negativeprompt || '';
     el('sws-f-steps').value    = pm.steps          || 20;
-    el('sws-f-cfg').value      = pm.cfgscale       || 7;
+    el('sws-f-cfg').value      = numOr(pm.cfgscale, 7);
     el('sws-f-count').value    = 4;
     el('sws-f-seed').value     = pm.seed           ?? -1;
     el('sws-f-sampler').value  = pm.sampler        || '';
@@ -471,6 +472,18 @@ const Scheduler = (() => {
     el('sws-f-ratio').value    = ratio;
     onRatioChange();
     if (pm.model) el('sws-f-model').value = pm.model;
+  }
+
+  // Refuse de modifier la file pendant un lancement (la tâche en cours serait désynchronisée)
+  function queueBusy() {
+    if (S.running) toast('File en cours d\'exécution — arrête-la d\'abord', 'error');
+    return S.running;
+  }
+
+  // Nombre saisi, ou la valeur par défaut s'il est vide/invalide (0 reste 0)
+  function numOr(v, def) {
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? n : def;
   }
 
   // ── Requête d'une tâche ─────────────────────────────────────────────────────
@@ -484,7 +497,7 @@ const Scheduler = (() => {
         negativeprompt: task.negative || '',
         model:          task.model,
         steps:          +task.steps || 20,
-        cfgscale:       +task.cfg   || 7,
+        cfgscale:       numOr(task.cfg, 7),
         width:          +task.width || 1024,
         height:         +task.height|| 1024,
         seed:           task.seed ?? -1,
@@ -597,6 +610,19 @@ const Scheduler = (() => {
 
   async function runQueue() {
     if (S.running) return;
+    try { await runQueueLoop(); }
+    finally {
+      if (S.running) {
+        S.running = false; S.paused = false; S.runActive = false;
+        dbSet('runActive', false).catch(() => {});
+        hideLivePreview();
+        updateButtons();
+        el('sws-btn-pause').textContent = '⏸ Pause';
+      }
+    }
+  }
+
+  async function runQueueLoop() {
     if (!S.connected) await connect();
     if (!S.connected) { toast('Pas connecté à SwarmUI', 'error'); return; }
     if (!API.session) { try { await API.getSession(); } catch(e) { toast('Session SwarmUI : ' + e.message, 'error'); return; } }
@@ -939,14 +965,15 @@ const Scheduler = (() => {
 
   // ── Tâches ──────────────────────────────────────────────────────────────────
   function makeTask(d) {
+    const id = S.nextId++;
     return {
-      id:      S.nextId++,
-      name:    d.name     || `Tâche ${S.nextId}`,
+      id,
+      name:    d.name     || `Tâche ${id}`,
       prompt:  d.prompt   || '',
       negative:d.negative || '',
       model:   d.model    || '',
       steps:   d.steps    || 20,
-      cfg:     d.cfg      || 7,
+      cfg:     numOr(d.cfg, 7),
       ratio:   d.ratio    || '1:1',
       width:   d.width    || 1024,
       height:  d.height   || 1024,
@@ -1018,7 +1045,9 @@ const Scheduler = (() => {
   async function deleteTask(id) {
     const t = S.tasks.find(x => x.id === id);
     if (!t) return;
+    if (S.running && t.status === 'running') { queueBusy(); return; }
     if (!await uiConfirm({ title: `Supprimer « ${t.name} » ?`, okLabel: 'Supprimer', danger: true })) return;
+    if (S.running && t.status === 'running') { queueBusy(); return; }
     S.tasks = S.tasks.filter(x => x.id !== id);
     save(); render();
   }
@@ -1447,12 +1476,14 @@ const Scheduler = (() => {
 
   function importQueue(ev) {
     const file = ev.target.files[0]; if (!file) return;
+    if (queueBusy()) { ev.target.value = ''; return; }
     const r = new FileReader();
     r.onload = async e => {
       try {
         const d = JSON.parse(e.target.result);
         if (!d.tasks?.length) throw new Error('aucune tâche dans le fichier');
         if (S.tasks.length && !await uiConfirm({ title: 'Remplacer la file actuelle ?', okLabel: 'Remplacer' })) return;
+        if (queueBusy()) return;
         S.nextId = 1; S.tasks = d.tasks.map(t => makeTask(t));
         save(); render();
         toast(`${S.tasks.length} tâches importées`);
@@ -1630,7 +1661,7 @@ const Scheduler = (() => {
       negativeprompt: el('sws-f-neg').value.trim(),
       model,
       steps:          +el('sws-f-steps').value || 20,
-      cfgscale:       +el('sws-f-cfg').value   || 7,
+      cfgscale:       numOr(el('sws-f-cfg').value, 7),
       width:          dims.w,
       height:         dims.h,
       seed:           -1,
@@ -1707,7 +1738,7 @@ const Scheduler = (() => {
       negative:el('sws-f-neg').value.trim(),
       model:   el('sws-f-model').value,
       steps:   +el('sws-f-steps').value || 20,
-      cfg:     +el('sws-f-cfg').value   || 7,
+      cfg:     numOr(el('sws-f-cfg').value, 7),
       ratio:   r, width: dims.w, height: dims.h,
       seed:    Number.isFinite(seedVal) ? seedVal : -1,
       count:   +el('sws-f-count').value || 1,
@@ -1730,12 +1761,13 @@ const Scheduler = (() => {
         scale:   +el('sws-f-hf-scale').value || 1.5,
         pct:     +el('sws-f-hf-pct').value   || 0.2,
         steps:   +el('sws-f-hf-steps').value || 10,
-        cfg:     +el('sws-f-hf-cfg').value   || 7,
+        cfg:     numOr(el('sws-f-hf-cfg').value, 7),
       },
     };
     const eid = el('sws-edit-id').value;
     if (eid) {
       const i = S.tasks.findIndex(t => t.id === +eid);
+      if (i !== -1 && S.running && S.tasks[i].status === 'running') { queueBusy(); return; }
       if (i !== -1) S.tasks[i] = {...S.tasks[i], ...data};
     } else {
       S.tasks.push(makeTask(data));

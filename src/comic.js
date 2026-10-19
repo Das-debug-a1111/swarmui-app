@@ -166,6 +166,17 @@ const Comic = (() => {
     if (h.undo.length > 50) h.undo.shift();
     h.redo = [];
   }
+  // Async image loads: target the page/panel captured at request time (undo/redo replaces panel
+  // objects, and the user may have changed page meanwhile)
+  function setPanelImage(page, panelId, dataUrl) {
+    const panel = S.pages.includes(page) && page.objects.find(o => o.id === panelId);
+    if (!panel) return;
+    if (page === S.project) pushUndo();
+    else { AS.savedIds.delete(page.id); scheduleAutosave(); }
+    panel.imageDataUrl = dataUrl;
+    delete panel._img;
+    preloadImages();
+  }
   function restoreFromSnapshot(json) {
     const d = JSON.parse(json);
     S.project.canvasWidth  = d.canvasWidth;
@@ -389,7 +400,7 @@ const Comic = (() => {
   // (plus selection handles). Pass an offscreen ctx + an explicit page object
   // to render any other page (thumbnails, full-res export) without touching
   // the main canvas or its selection state.
-  function render(ctx, project) {
+  function render(ctx, project, forExport) {
     const isMain = !ctx;
     if (isMain) { scheduleAutosave(); bumpPage(S.project.id); }
     project = project || S.project;
@@ -399,7 +410,7 @@ const Comic = (() => {
     ctx.fillRect(0, 0, project.canvasWidth, project.canvasHeight);
 
     for (const obj of project.objects) {
-      if (obj.type === 'panel')  drawPanel(ctx, obj);
+      if (obj.type === 'panel')  drawPanel(ctx, obj, forExport);
       else if (obj.type === 'bubble') drawBubble(ctx, obj);
       else if (obj.type === 'sfx') drawSfx(ctx, obj);
       else if (obj.type === 'text') drawText(ctx, obj);
@@ -440,12 +451,15 @@ const Comic = (() => {
     ctx.closePath();
   }
 
-  function drawPanel(ctx, obj) {
+  function drawPanel(ctx, obj, forExport) {
     withClipRotate(ctx, obj, ctx => {
-      tracePanelPolygon(ctx, obj);
-      ctx.fillStyle = '#dcdcdc';
-      ctx.fill();
-      if (obj.imageDataUrl && obj._img && obj._img.complete && obj._img.naturalWidth) {
+      const hasImage = obj.imageDataUrl && obj._img && obj._img.complete && obj._img.naturalWidth;
+      if (hasImage || !forExport) {
+        tracePanelPolygon(ctx, obj);
+        ctx.fillStyle = '#dcdcdc';
+        ctx.fill();
+      }
+      if (hasImage) {
         ctx.save();
         tracePanelPolygon(ctx, obj);
         ctx.clip();
@@ -460,7 +474,7 @@ const Comic = (() => {
         const dy = (obj.h - dh) / 2 + (obj.imgOffsetY || 0);
         ctx.drawImage(img, dx, dy, dw, dh);
         ctx.restore();
-      } else {
+      } else if (!forExport) {
         ctx.fillStyle = '#888';
         ctx.font = `${Math.max(12, Math.min(obj.w, obj.h) * 0.06)}px sans-serif`;
         ctx.textAlign = 'center';
@@ -679,15 +693,17 @@ const Comic = (() => {
     return `${obj.italic ? 'italic ' : ''}${obj.bold ? 'bold ' : ''}${obj.fontSize || 24}px ${obj.font || defaultFamily}`;
   }
   function wrapText(ctx, text, maxWidth) {
-    const words = text.split(/\s+/);
+    if (!text.trim()) return [];
     const lines = [];
-    let cur = '';
-    for (const word of words) {
-      const test = cur ? cur + ' ' + word : word;
-      if (ctx.measureText(test).width > maxWidth && cur) { lines.push(cur); cur = word; }
-      else cur = test;
+    for (const para of text.split(/\r?\n/)) {
+      let cur = '';
+      for (const word of para.split(/\s+/)) {
+        const test = cur ? cur + ' ' + word : word;
+        if (ctx.measureText(test).width > maxWidth && cur) { lines.push(cur); cur = word; }
+        else cur = test;
+      }
+      lines.push(cur);
     }
-    if (cur) lines.push(cur);
     return lines;
   }
   function drawHighlightBg(ctx, obj, lines, centerX, startY, lh, maxWidth) {
@@ -695,6 +711,7 @@ const Comic = (() => {
     ctx.save();
     ctx.fillStyle = obj.fillColor || '#ffff66';
     lines.forEach((l, i) => {
+      if (!l.trim()) return;
       const y = startY + i * lh;
       const lw = Math.min(ctx.measureText(l).width, maxWidth);
       ctx.fillRect(centerX - lw / 2 - lh * 0.12, y - lh / 2, lw + lh * 0.24, lh);
@@ -705,6 +722,7 @@ const Comic = (() => {
     const fontSize = obj.fontSize || 24;
     lines.forEach((l, i) => {
       const y = startY + i * lh;
+      if (!l.trim()) return;
       ctx.fillText(l, centerX, y, maxWidth);
       if (obj.underline) {
         const lw = Math.min(ctx.measureText(l).width, maxWidth);
@@ -933,7 +951,7 @@ const Comic = (() => {
   function withCleanRender(fn) {
     const prevSel = S.selectedId;
     S.selectedId = null;
-    render();
+    render(undefined, undefined, true);
     fn();
     S.selectedId = prevSel;
     render();
@@ -968,7 +986,7 @@ const Comic = (() => {
     const canvas = document.createElement('canvas');
     canvas.width = page.canvasWidth;
     canvas.height = page.canvasHeight;
-    render(canvas.getContext('2d'), page);
+    render(canvas.getContext('2d'), page, true);
     return canvas.toDataURL('image/png');
   }
 
@@ -990,6 +1008,8 @@ const Comic = (() => {
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 60000);
       toast(`✅ ${S.pages.length} pages exportées`);
+    } catch (e) {
+      toast('❌ Export ZIP impossible: ' + e.message);
     } finally {
       btn.disabled = false;
       btn.textContent = original;
@@ -997,15 +1017,19 @@ const Comic = (() => {
   }
 
   function exportAllPagesPDF() {
-    const orientation = p => (p.canvasWidth >= p.canvasHeight ? 'l' : 'p');
-    const first = S.pages[0];
-    const doc = new jspdf.jsPDF({ orientation: orientation(first), unit: 'px', format: [first.canvasWidth, first.canvasHeight] });
-    S.pages.forEach((page, i) => {
-      if (i > 0) doc.addPage([page.canvasWidth, page.canvasHeight], orientation(page));
-      doc.addImage(renderPageToDataURL(page), 'PNG', 0, 0, page.canvasWidth, page.canvasHeight);
-    });
-    doc.save(`comic-${Date.now()}.pdf`);
-    toast(`✅ PDF exporté (${S.pages.length} pages)`);
+    try {
+      const orientation = p => (p.canvasWidth >= p.canvasHeight ? 'l' : 'p');
+      const first = S.pages[0];
+      const doc = new jspdf.jsPDF({ orientation: orientation(first), unit: 'px', format: [first.canvasWidth, first.canvasHeight] });
+      S.pages.forEach((page, i) => {
+        if (i > 0) doc.addPage([page.canvasWidth, page.canvasHeight], orientation(page));
+        doc.addImage(renderPageToDataURL(page), 'PNG', 0, 0, page.canvasWidth, page.canvasHeight);
+      });
+      doc.save(`comic-${Date.now()}.pdf`);
+      toast(`✅ PDF exporté (${S.pages.length} pages)`);
+    } catch (e) {
+      toast('❌ Export PDF impossible: ' + e.message);
+    }
   }
 
   function exportProject() {
@@ -1147,6 +1171,8 @@ const Comic = (() => {
         const d = JSON.parse(e.target.result);
         let pages;
         if (Array.isArray(d.pages) && d.pages.length) {
+          S._nextPageId = Math.max(S._nextPageId,
+            ...d.pages.map(p => (parseInt(String(p.id).replace(/\D/g, ''), 10) || 0) + 1));
           pages = d.pages.map(p => ({
             id: p.id || genPageId(),
             canvasWidth: p.canvasWidth || 1080,
@@ -1460,10 +1486,10 @@ const Comic = (() => {
       if (hit) {
         S.selectedId = hit.id;
         syncBubbleControls(hit);
-        pushUndo();
+        // Snapshot deferred to the first real mousemove: a plain click-to-select changes nothing
         dragState = (e.ctrlKey && hit.type === 'panel')
-          ? { mode: 'imgmove', id: hit.id, last: pos }
-          : { mode: 'move', id: hit.id, last: pos };
+          ? { mode: 'imgmove', id: hit.id, last: pos, pendingUndo: true }
+          : { mode: 'move', id: hit.id, last: pos, pendingUndo: true };
       } else {
         S.selectedId = null;
       }
@@ -1483,6 +1509,8 @@ const Comic = (() => {
 
       const obj = findObject(dragState.id);
       if (!obj) return;
+
+      if (dragState.pendingUndo) { pushUndo(); dragState.pendingUndo = false; }
 
       if (dragState.mode === 'move') {
         obj.x += pos.x - dragState.last.x;
@@ -1553,7 +1581,8 @@ const Comic = (() => {
       const panel = [...S.project.objects].reverse().find(o => o.type === 'panel' && hitTestObject(o, pos.x, pos.y));
       if (!panel) { toast('Dépose l\'image sur un panel'); return; }
       const r = new FileReader();
-      r.onload = ev => { pushUndo(); panel.imageDataUrl = ev.target.result; delete panel._img; preloadImages(); };
+      const page = S.project, panelId = panel.id;
+      r.onload = ev => setPanelImage(page, panelId, ev.target.result);
       r.readAsDataURL(file);
     });
 
@@ -1613,12 +1642,13 @@ const Comic = (() => {
       panel = S.project.objects.find(o => o.type === 'panel' && !o.imageDataUrl);
     }
     if (!panel) { toast('Tous les panels sont déjà remplis'); return; }
+    const page = S.project, panelId = panel.id;
     fetch(url).then(r => {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       return r.blob();
     }).then(blob => {
       const r = new FileReader();
-      r.onload = ev => { pushUndo(); panel.imageDataUrl = ev.target.result; delete panel._img; preloadImages(); refreshSidePanels(); };
+      r.onload = ev => { setPanelImage(page, panelId, ev.target.result); refreshSidePanels(); };
       r.readAsDataURL(blob);
     }).catch(err => toast(`Image non chargée dans le Comic : ${err.message}`));
   }
@@ -1632,6 +1662,10 @@ const Comic = (() => {
   // ── Pages (multi-page projects, each page free to have its own size) ─────
   function switchToPage(i) {
     if (i < 0 || i >= S.pages.length || i === S.activePage) return;
+    if (S.activePage >= 0) {
+      AS.savedIds.delete(S.pages[S.activePage].id);
+      flushAutosave();
+    }
     S.activePage = i;
     S.project = S.pages[i];
     S.selectedId = null;
@@ -1658,8 +1692,11 @@ const Comic = (() => {
     if (i < 0) return;
     if (S.pages[i].objects.length && !confirm('Supprimer cette page et son contenu ?')) return;
     delete S.histories[id];
+    const activeId = S.pages[S.activePage].id;
     S.pages.splice(i, 1);
-    const nextActive = Math.min(S.activePage, S.pages.length - 1);
+    const nextActive = activeId === id
+      ? Math.min(i, S.pages.length - 1)
+      : S.pages.findIndex(p => p.id === activeId);
     S.activePage = -1; // ensures switchToPage runs even if the numeric index is unchanged
     switchToPage(nextActive);
   }
@@ -1673,6 +1710,7 @@ const Comic = (() => {
     S.pages.splice(to < 0 ? S.pages.length : to, 0, moved);
     S.activePage = S.pages.findIndex(p => p.id === activeId);
     renderPageStrip();
+    scheduleAutosave();
   }
 
   // Page thumbnails are cached per page and only redrawn when that page changed: the strip used to
@@ -2281,6 +2319,8 @@ const Comic = (() => {
     const newPages = chosen ? chosen.pages : buildAutoPackPages(queue, readAutoPackOptions());
     S.pages.push(...newPages);
     preloadImages();
+    AS.savedIds.delete(S.pages[S.activePage].id);
+    flushAutosave();
     S.activePage = -1; // force switchToPage to actually apply even if the index is unchanged
     switchToPage(S.pages.length - newPages.length);
     clearAutoPackQueue();
@@ -2314,9 +2354,27 @@ const Comic = (() => {
         render();
       }
     });
+    // One undo snapshot per slider/color gesture (first input), re-armed on 'change' (release/commit).
+    // Registered BEFORE each control's own handler so the snapshot precedes the mutation.
+    const undoOncePerGesture = (id, types) => {
+      const el = q(id);
+      let armed = true;
+      el.addEventListener('input', () => {
+        const sel = S.selectedId && findObject(S.selectedId);
+        if (armed && sel && types.includes(sel.type)) { pushUndo(); armed = false; }
+      });
+      el.addEventListener('change', () => { armed = true; });
+    };
+    undoOncePerGesture('comic-text-color', ['bubble', 'text']);
+    undoOncePerGesture('comic-text-size', ['bubble', 'text']);
+    undoOncePerGesture('comic-sfx-color', ['sfx']);
+    undoOncePerGesture('comic-sfx-size', ['sfx']);
+    undoOncePerGesture('comic-fill-color', ['bubble', 'sfx', 'text']);
+    undoOncePerGesture('comic-border-width', ['panel', 'bubble']);
+    undoOncePerGesture('comic-border-color', ['panel', 'bubble']);
     q('comic-bubble-font').addEventListener('change', function () {
       const sel = S.selectedId && findObject(S.selectedId);
-      if (sel && (sel.type === 'bubble' || sel.type === 'sfx' || sel.type === 'text')) { sel.font = this.value; render(); }
+      if (sel && (sel.type === 'bubble' || sel.type === 'sfx' || sel.type === 'text')) { pushUndo(); sel.font = this.value; render(); }
     });
     q('comic-text-color').addEventListener('input', function () {
       const sel = S.selectedId && findObject(S.selectedId);
@@ -2437,7 +2495,8 @@ const Comic = (() => {
       const panel = findObject(S._pendingImagePanelId);
       if (file && panel) {
         const r = new FileReader();
-        r.onload = ev => { pushUndo(); panel.imageDataUrl = ev.target.result; delete panel._img; preloadImages(); };
+        const page = S.project, panelId = panel.id;
+        r.onload = ev => setPanelImage(page, panelId, ev.target.result);
         r.readAsDataURL(file);
       }
       e.target.value = '';

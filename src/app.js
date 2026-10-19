@@ -117,7 +117,7 @@ function applyTxt2ImgState(state) {
     addLoRAItem();
     const item = App.loraItems[App.loraItems.length - 1];
     item.model  = l.model;
-    item.weight = +l.weight || 1;
+    item.weight = Number.isNaN(parseFloat(l.weight)) ? 1 : parseFloat(l.weight);
     const div   = $('lora-list').lastElementChild;
     if (div) {
       const sel = div.querySelector('.lora-sel');   if (sel) setLoraSelValue(sel, l.model);
@@ -167,7 +167,7 @@ async function loadAll() {
   await Promise.all([
     loadModels(),
     loadVAEs(),
-    loadLoRAs(),
+    loadLoRAs().catch(e => { console.warn('loadLoRAs:', e); App.loraModels = []; refreshLoraChoices(); }),
     loadParams(),
     loadRefinerModels(),
     loadCNModels(),
@@ -1305,7 +1305,7 @@ function buildTxt2ImgPayload() {
     if (refModel) payload.refinermodel = refModel;
     payload.refinermethod             = 'PostApply';
     payload.refinerupscale            = parseFloat($('inp-refiner-scale').value) || 1.5;
-    payload.refinercontrolpercentage  = parseFloat($('inp-refiner-pct').value)   || 0.2;
+    payload.refinercontrolpercentage  = Number.isNaN(parseFloat($('inp-refiner-pct').value)) ? 0.2 : parseFloat($('inp-refiner-pct').value);
     payload.refinerupscalemethod      = $('sel-refiner-method').value || 'pixel-lanczos';
     payload.refinersteps              = parseInt($('inp-refiner-steps').value)   || 10;
     payload.refinercfgscale           = parseFloat($('inp-refiner-cfg').value)   || 7;
@@ -1316,9 +1316,9 @@ function buildTxt2ImgPayload() {
   // ControlNet params
   if ($('chk-cn').checked && _cnImageData) {
     payload.controlnetimageinput = _cnImageData;
-    payload.controlnetstrength   = parseFloat($('inp-cn-strength').value) || 1;
+    payload.controlnetstrength   = Number.isNaN(parseFloat($('inp-cn-strength').value)) ? 1 : parseFloat($('inp-cn-strength').value);
     payload.controlnetstart      = parseFloat($('inp-cn-start').value)    || 0;
-    payload.controlnetend        = parseFloat($('inp-cn-end').value)      || 1;
+    payload.controlnetend        = Number.isNaN(parseFloat($('inp-cn-end').value)) ? 1 : parseFloat($('inp-cn-end').value);
     const cnModel = $('sel-cn-model').value;
     if (cnModel) payload.controlnetmodel = cnModel;
     const cnType = $('sel-cn-type').value;
@@ -2159,7 +2159,7 @@ function applyPreset(preset) {
   // LoRAs: SwarmUI stores as comma-separated "model1,model2" / "w1,w2"
   if (m.loras) {
     const loraNames    = String(m.loras).split(',').map(s => s.trim()).filter(Boolean);
-    const loraWeights  = m.loraweights ? String(m.loraweights).split(',').map(s => parseFloat(s.trim()) || 1) : [];
+    const loraWeights  = m.loraweights ? String(m.loraweights).split(',').map(s => parseFloat(s.trim())).map(w => Number.isNaN(w) ? 1 : w) : [];
     // Clear existing
     $('lora-list').innerHTML = '';
     App.loraItems = [];

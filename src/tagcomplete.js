@@ -36,9 +36,11 @@ const TagComplete = (() => {
 
   function buildDB() {
     try {
-      DB = JSON.parse(localStorage.getItem('tc-extra') || '[]');
+      const raw = JSON.parse(localStorage.getItem('tc-extra') || '[]');
+      DB = (Array.isArray(raw) ? raw : []).filter(t => t && typeof t.lower === 'string' && typeof t.name === 'string')
+        .map(t => Array.isArray(t.aliases) ? t : { ...t, aliases: [] });
     } catch { DB = []; }
-    DB.sort((a, b) => b.count - a.count);
+    DB.sort((a, b) => (b.count || 0) - (a.count || 0));
   }
 
   // Recherche exacte d'un tag (ou d'un de ses alias) dans le CSV chargé → { name, count } ou null.
@@ -100,8 +102,10 @@ const TagComplete = (() => {
     const seen = new Set(DB.map(t => t.lower));
     tags.forEach(t => { if (!seen.has(t.lower)) { DB.push(t); seen.add(t.lower); } });
     DB.sort((a,b) => b.count - a.count);
-    try { localStorage.setItem('tc-extra', JSON.stringify(DB)); } catch {}
+    let saved = true;
+    try { localStorage.setItem('tc-extra', JSON.stringify(DB)); } catch { saved = false; }
     updateStats();
+    return saved;
   }
 
   // ── Dropdown ───────────────────────────────────────────────────────────────
@@ -449,8 +453,8 @@ const TagComplete = (() => {
         const reader = new FileReader();
         reader.onload = ev => {
           const tags = parseCSV(ev.target.result);
-          mergeExtra(tags);
-          showMsg(`✓ ${tags.length} tags ajoutés. Total: ${DB.length}`);
+          const saved = mergeExtra(tags);
+          showMsg(saved ? `✓ ${tags.length} tags ajoutés. Total: ${DB.length}` : `⚠ ${tags.length} tags ajoutés pour cette session, mais non sauvegardés (stockage plein). Total: ${DB.length}`);
         };
         reader.readAsText(file);
       };
@@ -472,8 +476,8 @@ const TagComplete = (() => {
         if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
         const text = await resp.text();
         const tags = parseCSV(text);
-        mergeExtra(tags);
-        showMsg(`✓ ${tags.length.toLocaleString()} tags chargés. Total: ${DB.length.toLocaleString()}`);
+        const saved = mergeExtra(tags);
+        showMsg(saved ? `✓ ${tags.length.toLocaleString()} tags chargés. Total: ${DB.length.toLocaleString()}` : `⚠ ${tags.length.toLocaleString()} tags chargés pour cette session, mais non sauvegardés (stockage plein). Total: ${DB.length.toLocaleString()}`);
       } catch (e) {
         showMsg(`❌ Erreur: ${e.message}`);
       }

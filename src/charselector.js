@@ -13,7 +13,8 @@ const CharSelector = (() => {
   let tagAssist    = {};
   // Corrupted storage must not kill the whole selector at load time
   const readJSON = (k, def) => { try { return JSON.parse(localStorage.getItem(k)) ?? def; } catch { return def; } };
-  let favorites    = new Set(readJSON('cs-favs', []));
+  const favsRaw    = readJSON('cs-favs', []);
+  let favorites    = new Set(Array.isArray(favsRaw) ? favsRaw : []);
   let weights      = readJSON('cs-weights', {});
   let recentlyUsed = readJSON('cs-recent', []);
   let filtered     = [];
@@ -65,7 +66,7 @@ const CharSelector = (() => {
       }
 
       allChars  = Array.isArray(listResult) ? listResult : [];
-      tagAssist = tags || null;
+      tagAssist = tags || {};
 
       // Populate series select
       const series = [...new Set(allChars.map(c => c.series).filter(Boolean))].sort();

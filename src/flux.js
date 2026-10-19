@@ -613,7 +613,7 @@ const Flux = (() => {
       addFluxLora();
       const item = S.loras[S.loras.length - 1];
       const row  = q('flux-lora-list').lastElementChild;
-      item.model = l.model; item.weight = +l.weight || 1;
+      item.model = l.model; item.weight = Number.isNaN(parseFloat(l.weight)) ? 1 : parseFloat(l.weight);
       const sel = row.querySelector('.flux-lora-sel');
       if (![...sel.options].some(o => o.value === l.model)) sel.insertAdjacentHTML('beforeend', `<option value="${esc(l.model)}">${esc(l.model)}</option>`);
       sel.value = l.model;
@@ -621,7 +621,7 @@ const Flux = (() => {
       row.querySelector('.flux-lora-w-inp').value = item.weight;
     });
     renderEditImages();
-    if (st.count) { q('flux-sel-count').value = st.count; q('flux-sel-count').dispatchEvent(new Event('sync')); }
+    if (st.count) q('flux-sel-count').dispatchEvent(new CustomEvent('sync', { detail: st.count }));
   }
 
   // Rouvre une tâche de la file dans Edit pour la modifier (bandeau « Mettre à jour la tâche »)
@@ -746,10 +746,7 @@ const Flux = (() => {
     div.querySelector('[data-action="copy"]').addEventListener('click', e => { e.stopPropagation(); copyImageToClipboard(img.url); });
     div.querySelector('[data-action="save"]').addEventListener('click', e => {
       e.stopPropagation();
-      const a = document.createElement('a');
-      a.href = img.url;
-      a.download = `edit-${Date.now()}.png`;
-      a.click();
+      downloadImage(img.url);
     });
 
     div.addEventListener('click', () => openLightbox(img.url, 'flux-gallery'));
@@ -793,7 +790,7 @@ const Flux = (() => {
     countCustom.addEventListener('input', e => { if (parseInt(e.target.value, 10) > 0) setCount(e.target.value); });
     countCustom.addEventListener('change', e => { if (e.target.value !== '') setCount(e.target.value); });
     countCustom.addEventListener('keydown', e => { if (e.key === 'Enter') e.target.blur(); });
-    countSel.addEventListener('sync', () => setCount(countSel.value));   // valeur posée par restore()
+    countSel.addEventListener('sync', e => setCount(e.detail));   // valeur posée par restore()
     syncCount();
     q('flux-editimg-file').addEventListener('change', e => { addEditImages(e.target.files); e.target.value = ''; });
     q('flux-chk-editimg-size').addEventListener('change', applyEditImageSize);

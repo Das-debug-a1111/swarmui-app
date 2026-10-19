@@ -47,6 +47,15 @@ const Watermark = (() => {
     bindExportControls();
     bindDrag($('wm-overlay-wrap'));
     bindDrag($('wm-text-overlay-wrap'));
+    window.addEventListener('resize', relayout);
+  }
+
+  // Recalcule taille/positions de l'aperçu (clientWidth = 0 tant que l'onglet est masqué) ; l'export reste en fractions
+  function relayout() {
+    if (!initialized || !activeEntry() || !$('wm-canvas-wrap').clientWidth) return;
+    applyWmSize();
+    renderTextOverlay();
+    applyOverlayPositions();
   }
 
   // ── Loading images (multi) ────────────────────────────────────────────────
@@ -96,8 +105,10 @@ const Watermark = (() => {
   function addFiles(fileList) {
     const files = [...fileList].filter(f => f.type && f.type.startsWith('image/'));
     if (!files.length) return;
-    Promise.all(files.map(f => fileToDataUrl(f).then(dataUrl => ({ id: genId(), name: f.name, dataUrl, override: null }))))
+    Promise.all(files.map(f => fileToDataUrl(f).then(dataUrl => ({ id: genId(), name: f.name, dataUrl, override: null })).catch(() => null)))
       .then(entries => {
+        entries = entries.filter(Boolean);
+        if (!entries.length) { toast('❌ Lecture des images impossible'); return; }
         const wasEmpty = S.images.length === 0;
         S.images.push(...entries);
         renderImageList();
@@ -444,12 +455,17 @@ const Watermark = (() => {
   async function exportCurrent() {
     const entry = activeEntry();
     if (!entry) return;
-    const canvas = await buildWatermarkedCanvasFor(entry);
-    const format = $('wm-export-format').value;
-    const a = document.createElement('a');
-    a.download = `watermarked_${Date.now()}.${format === 'jpg' ? 'jpg' : 'png'}`;
-    a.href = canvasToDataUrl(canvas);
-    a.click();
+    try {
+      const canvas = await buildWatermarkedCanvasFor(entry);
+      const format = $('wm-export-format').value;
+      const a = document.createElement('a');
+      a.download = `watermarked_${Date.now()}.${format === 'jpg' ? 'jpg' : 'png'}`;
+      a.href = canvasToDataUrl(canvas);
+      a.click();
+    } catch (e) {
+      console.error('[Watermark] export failed:', e);
+      toast('❌ Export impossible: ' + (e?.message || 'erreur'));
+    }
   }
 
   async function exportAllZip() {
@@ -461,23 +477,29 @@ const Watermark = (() => {
     try {
       const zip = new JSZip();
       const format = $('wm-export-format').value === 'jpg' ? 'jpg' : 'png';
-      let n = 0;
+      const used = new Set();
+      let n = 0, failed = 0;
       for (const entry of S.images) {
         try {
           const canvas = await buildWatermarkedCanvasFor(entry);
           const dataUrl = canvasToDataUrl(canvas);
           const base64  = dataUrl.split(',')[1];
-          const base    = (entry.name || `image_${++n}`).replace(/\.[^.]+$/, '');
-          zip.file(`${base}_watermarked.${format}`, base64, { base64: true });
-        } catch (e) { console.warn('[Watermark] export failed for', entry.name, e); }
+          const base    = (entry.name || `image_${n + 1}`).replace(/\.[^.]+$/, '');
+          let fname = `${base}_watermarked.${format}`;
+          for (let k = 2; used.has(fname.toLowerCase()); k++) fname = `${base}_watermarked-${k}.${format}`;
+          used.add(fname.toLowerCase());
+          zip.file(fname, base64, { base64: true });
+          n++;
+        } catch (e) { failed++; console.warn('[Watermark] export failed for', entry.name, e); }
       }
+      if (!n) { toast(`❌ Export impossible : ${failed} image${failed > 1 ? 's' : ''} en échec`); return; }
       const blob = await zip.generateAsync({ type: 'blob' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = `watermarked_${Date.now()}.zip`;
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 60000);
-      toast(`✅ ${S.images.length} image${S.images.length > 1 ? 's' : ''} exportées`);
+      toast(`✅ ${n} image${n > 1 ? 's' : ''} exportée${n > 1 ? 's' : ''}` + (failed ? ` — ⚠️ ${failed} en échec` : ''));
     } finally {
       btn.disabled = false;
       btn.textContent = original;
@@ -499,12 +521,13 @@ const Watermark = (() => {
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   function fileToDataUrl(file) {
-    return new Promise(resolve => {
+    return new Promise((resolve, reject) => {
       const r = new FileReader();
       r.onload = e => resolve(e.target.result);
+      r.onerror = () => reject(r.error || new Error('Lecture du fichier impossible'));
       r.readAsDataURL(file);
     });
   }
 
-  return { init, loadFromSrc };
+  return { init, loadFromSrc, relayout };
 })();

@@ -29,6 +29,7 @@ const InpaintScheduler = (() => {
     brushSize:   40,
     undoStack:   [],    // [{ maskId, data }]
     initialized: false,
+    galUrls:     new Set(),   // blobs affichés dans la galerie : révoqués seulement au vidage de la galerie
   };
 
   function esc(s) {
@@ -311,7 +312,7 @@ const InpaintScheduler = (() => {
   }
 
   function releaseResults(item) {
-    item.results.forEach(r => URL.revokeObjectURL(r.url));
+    item.results.forEach(r => { if (!S.galUrls.has(r.url)) URL.revokeObjectURL(r.url); });
     item.results = [];
   }
 
@@ -807,6 +808,7 @@ const InpaintScheduler = (() => {
       a.click();
     });
     q('ips-gallery').appendChild(card);
+    S.galUrls.add(result.url);
   }
 
   async function runQueue() {
@@ -819,8 +821,9 @@ const InpaintScheduler = (() => {
     S.running = true; S.paused = false; S.stopReq = false;
     updateButtons();
 
-    let done = 0;
-    const total = pending.length;
+    let done = 0, failed = 0;
+    // Des photos peuvent être ajoutées pendant le lancement : le total est recalculé à chaque tour
+    const total = () => done + failed + S.items.filter(it => it.status === 'ready' || it.status === 'running').length;
 
     for (const item of S.items) {
       if (S.stopReq) break;
@@ -833,16 +836,17 @@ const InpaintScheduler = (() => {
       renderQueue();
       q('ips-prog-name').textContent = item.name;
       q('ips-prog-name').style.color = '';
-      q('ips-qcounter').textContent  = `Photo ${done + 1} sur ${total}`;
+      const tot = total();
+      q('ips-qcounter').textContent  = `Photo ${done + failed + 1} sur ${tot}`;
       setProgress(0, 'Démarrage…');
 
       try {
-        await runOne(item, `Photo ${done + 1}/${total}`);
+        await runOne(item, `Photo ${done + failed + 1}/${tot}`);
         item.status = 'done'; done++;
         item.results.forEach(r => addToGallery(item, r));
       } catch (e) {
         if (S.stopReq) { item.status = 'ready'; break; }
-        item.status = 'error'; item.errMsg = e.message;
+        item.status = 'error'; item.errMsg = e.message; failed++;
         showErrorToast(`« ${item.name} » a échoué : ${e.message}`);
       }
       renderQueue();
@@ -855,10 +859,10 @@ const InpaintScheduler = (() => {
     renderQueue();
 
     if (!S.stopReq) {
-      const failed = total - done;
+      const all = done + failed;
       q('ips-prog-name').textContent = failed ? `Terminé — ${failed} en erreur` : 'Terminé';
       q('ips-prog-name').style.color = failed > 0 ? 'var(--orange)' : 'var(--green)';
-      setProgress(1, `${done}/${total} photo${total > 1 ? 's' : ''}`);
+      setProgress(1, `${done}/${all} photo${all > 1 ? 's' : ''}`);
     } else {
       q('ips-prog-name').textContent = 'Arrêté';
       q('ips-prog-name').style.color = 'var(--red)';
@@ -893,6 +897,9 @@ const InpaintScheduler = (() => {
   }
 
   function clearGallery() {
+    const live = new Set(S.items.flatMap(it => it.results.map(r => r.url)));
+    S.galUrls.forEach(u => { if (!live.has(u)) URL.revokeObjectURL(u); });
+    S.galUrls.clear();
     q('ips-gallery').innerHTML = '<div class="sws-gal-empty">Les retouches apparaîtront ici</div>';
   }
 
@@ -1007,6 +1014,10 @@ const InpaintScheduler = (() => {
   function init() {
     if (S.initialized) return;
     S.initialized = true;
+    const forgeInp = q('ips-forge-url');
+    const savedForge = localStorage.getItem('forge-url');
+    if (savedForge && forgeInp) forgeInp.value = savedForge;
+    forgeInp?.addEventListener('change', () => localStorage.setItem('forge-url', forgeInp.value.trim()));
     bindUI();
     renderPresetList();
     renderQueue();

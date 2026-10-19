@@ -51,8 +51,13 @@ const Twitter = (() => {
     fromCsv:   false,
     running:   false,
     count:     4,
+    presetMissing: null, // label du preset du défi s'il est introuvable (bloque Generate)
   };
   const thumbCache = new Map();
+  const THUMB_PARALLEL = 2;
+  const thumbQueue = [];
+  let thumbActive = 0;
+  let imgSeq = 0;   // compteur persistant : noms d'images uniques entre générations
   let initialized = false;
 
   // ── Character data (same IPC as the Character panel) ─────────────────────
@@ -65,7 +70,7 @@ const Twitter = (() => {
       ]);
       if (Array.isArray(list)) S.allChars = list;
       S.tagAssist = tags || {};
-      S.loaded = true;
+      if (Array.isArray(list)) S.loaded = true;
     } catch (e) { console.error('[Twitter] loadCharData:', e); }
   }
 
@@ -76,11 +81,16 @@ const Twitter = (() => {
       if (cached) { img.src = cached; img.classList.add('loaded'); }
       return;
     }
+    await new Promise(resolve => { thumbQueue.push(resolve); pumpThumbs(); });
     try {
       const dataUrl = await window.electronAPI.charThumb(name);
-      thumbCache.set(name, dataUrl);
-      if (dataUrl) { img.src = dataUrl; img.classList.add('loaded'); }
+      if (dataUrl) { thumbCache.set(name, dataUrl); img.src = dataUrl; img.classList.add('loaded'); }
     } catch { /* thumb missing — leave placeholder */ }
+    finally { thumbActive--; pumpThumbs(); }
+  }
+
+  function pumpThumbs() {
+    while (thumbActive < THUMB_PARALLEL && thumbQueue.length) { thumbActive++; thumbQueue.shift()(); }
   }
 
   // ── History (localStorage) ────────────────────────────────────────────────
@@ -220,7 +230,9 @@ const Twitter = (() => {
     badge.className = 'tw-preset-badge ' + (entry ? 'tw-preset-' + S.current.label.toLowerCase() : 'tw-preset-missing');
 
     $('tw-empty').style.display = 'none';
+    S.presetMissing = entry ? null : S.current.label;
     if (entry) selectPreset(entry.title);
+    else { $('tw-preset-sel').value = ''; $('tw-preset-info').textContent = ''; }
     const wrap = $('tw-cards');
     wrap.innerHTML = '';
     S.current.chars.forEach(c => wrap.appendChild(buildCard(c)));
@@ -310,9 +322,13 @@ const Twitter = (() => {
 
   function fillPresetSelect() {
     const sel = $('tw-preset-sel');
-    const cur = sel.value || localStorage.getItem('tw-preset') || '';
+    const missing = S.presetMissing;
+    const cur = missing ? '' : sel.value || localStorage.getItem('tw-preset') || '';
     sel.innerHTML = '<option value="">— Aucun —</option>' + presetNames().map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
     if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
+    // Preset du défi enfin sauvegardé : on le sélectionne ; sinon le select reste sur « Aucun »
+    const entry = missing && S.current ? findPresetEntry(S.current.label) : null;
+    if (entry) { S.presetMissing = null; selectPreset(entry.title); }
   }
 
   function fillModelSelect() {
@@ -356,6 +372,7 @@ const Twitter = (() => {
     if (!prompt) { showErrorToast('Choisis un perso du défi ou écris un prompt.'); return null; }
     const model = $('tw-model').value;
     if (!model) { showErrorToast('Choisis un modèle.'); return null; }
+    const cfg = parseFloat($('tw-cfg').value);
     // Base = tout le preset (sampler, scheduler, LoRAs, refiner…), puis les réglages de l'onglet
     const payload = { ...(currentPreset() || {}) };
     delete payload.prompt;
@@ -364,7 +381,7 @@ const Twitter = (() => {
       negativeprompt: $('tw-neg').value.trim(),
       model,
       steps:    parseInt($('tw-steps').value, 10)  || 20,
-      cfgscale: parseFloat($('tw-cfg').value)       || 7,
+      cfgscale: Number.isFinite(cfg) ? cfg : 7,
       width:    parseInt($('tw-width').value, 10)  || 1024,
       height:   parseInt($('tw-height').value, 10) || 1024,
       images:   S.count,
@@ -393,6 +410,7 @@ const Twitter = (() => {
   function generate() {
     if (S.running) { API.interrupt?.().catch(() => {}); finish(); return; }
     if (!App.connected) { showErrorToast('Non connecté à SwarmUI'); return; }
+    if (S.presetMissing) { showErrorToast(`Preset "${S.presetMissing}" introuvable — sauvegarde-le dans les Presets de Txt2Img ou choisis-en un autre`); return; }
     const payload = buildPayload();
     if (!payload) return;
     S.running = true;
@@ -412,7 +430,7 @@ const Twitter = (() => {
         const src = typeof imgData === 'string' && (imgData.startsWith('data:') || imgData.startsWith('http'))
           ? imgData : `${API.origin}/${imgData}`;
         n++;
-        Watermark.loadFromSrc(src, { name: `${baseName}_${n}`, select: n === 1 });
+        Watermark.loadFromSrc(src, { name: `${baseName}_${++imgSeq}`, select: n === 1 });
       },
       onDone() { setProgress(1, `${n} image${n > 1 ? 's' : ''} prête${n > 1 ? 's' : ''}`); finish(); },
       onError(err) { finish(); showErrorToast(`Génération : ${err}`); },
@@ -471,7 +489,7 @@ const Twitter = (() => {
   function bindUI() {
     $('tw-generate').addEventListener('click', generate);
     $('tw-to-txt2img').addEventListener('click', openInTxt2Img);
-    $('tw-preset-sel').addEventListener('change', () => selectPreset());
+    $('tw-preset-sel').addEventListener('change', () => { S.presetMissing = null; selectPreset(); });
     document.querySelectorAll('#tw-seg-count button').forEach(b => b.addEventListener('click', () => setCount(b.dataset.v)));
     $('tw-posted').addEventListener('click', () => S.chosen && togglePosted(S.chosen.histId));
     $('tw-prompt').addEventListener('keydown', e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); generate(); } });
@@ -496,6 +514,7 @@ const Twitter = (() => {
     fillModelSelect();
     await loadCharData();
     if (!S.current && S.allChars.length) roll();
+    Watermark.relayout?.();
   }
 
   return { init, onShow };
