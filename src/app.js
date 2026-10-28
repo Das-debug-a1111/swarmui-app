@@ -420,6 +420,9 @@ function extGroupState(groupId) {
   return App.extGroups[groupId] || (App.extGroups[groupId] = { enabled: false, params: {} });
 }
 
+// Flags que SwarmUI a refusés à l'installation ("Unknown feature ID") : ce ne sont pas des nœuds ComfyUI
+const nonInstallableFlags = new Set();
+
 function extParamState(groupId, p) {
   const g = extGroupState(groupId);
   return g.params[p.id] || (g.params[p.id] = { value: extDefaultValue(p), enabled: false });
@@ -498,6 +501,8 @@ function renderExtensionGroups(params, groups) {
     gState.missing = App.supportedFeatures
       ? [...new Set(ps.map(p => p.feature_flag).filter(f => f && !App.supportedFeatures.has(f)))]
       : [];
+    const installable = gState.missing.filter(f => !nonInstallableFlags.has(f));
+    const unavailable = gState.missing.filter(f => nonInstallableFlags.has(f));
     const rowHtml = p => {
       const pState = extParamState(g.id, p);
       const needsOwnToggle = p.toggleable && p.type !== 'boolean';
@@ -518,9 +523,10 @@ function renderExtensionGroups(params, groups) {
       <div class="ext-group" data-group="${esc(g.id)}">
         <div class="ext-group-hdr">
           ${g.toggles ? `<label><input type="checkbox" class="ext-group-en" ${gState.enabled ? 'checked' : ''}> ${esc(groupTitle(g))}</label>` : `<span>${esc(groupTitle(g))}</span>`}
-          ${gState.missing.length ? `<button type="button" class="comic-tbtn ext-install" title="Nœud ComfyUI manquant sur le backend : ${esc(gState.missing.join(', '))}">⚠ Installer</button>` : ''}
+          ${installable.length ? `<button type="button" class="comic-tbtn ext-install" title="Nœud ComfyUI manquant sur le backend : ${esc(installable.join(', '))}">⚠ Installer</button>` : ''}
         </div>
-        ${gState.missing.length ? `<div class="field-hint ext-missing-hint">⚠ Non installé sur ton SwarmUI (${esc(gState.missing.join(', '))}) — ce groupe est ignoré à la génération tant que ce n'est pas installé.</div>` : ''}
+        ${installable.length ? `<div class="field-hint ext-missing-hint">⚠ Non installé sur ton SwarmUI (${esc(installable.join(', '))}) — ce groupe est ignoré à la génération tant que ce n'est pas installé.</div>` : ''}
+        ${unavailable.length ? `<div class="field-hint ext-missing-hint">ℹ Réglage lié à un backend ou une extension SwarmUI absente (${esc(unavailable.join(', '))}) — ce n'est pas un nœud ComfyUI, rien à installer ici. Ce groupe est ignoré à la génération.</div>` : ''}
         <div class="ext-group-body${g.toggles && !gState.enabled ? ' hidden' : ''}">${rows}</div>
       </div>`;
   }).join('');
@@ -532,7 +538,7 @@ function renderExtensionGroups(params, groups) {
     const enCk    = groupEl.querySelector('.ext-group-en');
     const instBtn = groupEl.querySelector('.ext-install');
     if (instBtn) instBtn.addEventListener('click', async () => {
-      const missing = extGroupState(g.id).missing;
+      const missing = extGroupState(g.id).missing.filter(f => !nonInstallableFlags.has(f));
       if (!confirm(`Installer sur ton SwarmUI : ${missing.join(', ')} ?\n\nSwarmUI va télécharger le nœud ComfyUI depuis GitHub puis redémarrer ComfyUI.`)) return;
       instBtn.disabled = true; instBtn.textContent = 'Installation…';
       try {
@@ -540,6 +546,12 @@ function renderExtensionGroups(params, groups) {
         if (r?.error) throw new Error(r.error);
         toast('✅ Installation lancée — attends que ComfyUI redémarre, puis clique ↻');
       } catch (e) {
+        if (/unknown feature id/i.test(e.message)) {
+          missing.forEach(f => nonInstallableFlags.add(f));
+          showErrorToast(`Rien à installer : ${missing.join(', ')} n'est pas un nœud ComfyUI (backend ou extension SwarmUI absente)`);
+          if (App._extLast) renderExtensionGroups(App._extLast.params, App._extLast.groups);
+          return;
+        }
         showErrorToast(`Installation : ${e.message}`);
       } finally {
         instBtn.disabled = false; instBtn.textContent = '⚠ Installer';
