@@ -19,6 +19,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   pickLaunchScript:     (key, title, message) => ipcRenderer.invoke('launcher:pickScript', key, title, message),
   launchProcess:        (key, args)           => ipcRenderer.invoke('launcher:launch', key, args),
 
+  // LLM local (Ollama)
+  llmGenerate:          (opts)     => ipcRenderer.invoke('llm:generate', opts),
+  llmModels:            (url)      => ipcRenderer.invoke('llm:models', url),
+
   // Model downloads
   pickModelsFolder:     ()         => ipcRenderer.invoke('models:pickFolder'),
   downloadModel:        (url, dst) => ipcRenderer.invoke('models:download', { url, destPath: dst }),

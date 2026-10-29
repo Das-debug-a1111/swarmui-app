@@ -7,6 +7,10 @@ const crypto  = require('crypto');
 const zlib    = require('zlib');
 const { spawn } = require('child_process');
 
+// Un terminal fermé rend stdout/stderr inutilisables (EIO/EPIPE) : ne pas planter l'app pour un simple log
+process.stdout.on('error', () => {});
+process.stderr.on('error', () => {});
+
 // ── Config (persisted in userData) ───────────────────────────────────────────
 const CONFIG_FILE = path.join(app.getPath('userData'), 'config.json');
 
@@ -343,6 +347,109 @@ function createWindow() {
     if (/^https?:\/\//i.test(url)) shell.openExternal(url);
   });
 }
+
+// ── IPC: LLM local (Ollama) ───────────────────────────────────────────────────
+function llmBaseUrl(url) {
+  if (typeof url !== 'string') return null;
+  try {
+    const u = new URL(url.trim());
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    return u.origin;
+  } catch { return null; }
+}
+
+function llmNetError(e, base) {
+  if (e && (e.name === 'TimeoutError' || e.name === 'AbortError')) return 'Délai dépassé : Ollama n\'a pas répondu à temps.';
+  return `Ollama ne répond pas à ${base} — est-il lancé ?`;
+}
+
+function llmCleanText(raw) {
+  let t = String(raw || '').replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<think>[\s\S]*$/i, '').replace(/<\/think>/gi, '').trim();
+  const fence = t.match(/^```[a-z]*\n?([\s\S]*?)\n?```$/i);
+  if (fence) t = fence[1].trim();
+  const pairs = [['"', '"'], ['\u201C', '\u201D'], ['\u00AB', '\u00BB']];
+  for (const [a, b] of pairs) {
+    if (t.length > 1 && t.startsWith(a) && t.endsWith(b) && !t.slice(1, -1).includes(a)) { t = t.slice(1, -1).trim(); break; }
+  }
+  return t;
+}
+
+ipcMain.handle('llm:generate', async (_, opts) => {
+  try {
+    const { url, model, system, prompt, temperature, unload, history, numCtx } = opts || {};
+    const base = llmBaseUrl(url);
+    if (!base) return { error: 'URL d\'Ollama invalide.' };
+    if (typeof model !== 'string' || !model.trim() || model.length > 200) return { error: 'Nom de modèle invalide.' };
+    if (typeof system !== 'string' || !system.trim() || system.length > 20000) return { error: 'Prompt système (avec les exemples) vide ou trop long (max 20000 caractères).' };
+    if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 4000) return { error: 'Idée invalide (vide ou trop longue).' };
+    if (typeof temperature !== 'number' || !Number.isFinite(temperature) || temperature < 0 || temperature > 2) return { error: 'Température invalide (0 à 2).' };
+
+    const past = [];
+    if (history !== undefined) {
+      if (!Array.isArray(history) || history.length > 40) return { error: 'Historique de conversation invalide (40 messages max).' };
+      let total = 0;
+      for (const m of history) {
+        if (!m || (m.role !== 'user' && m.role !== 'assistant') || typeof m.content !== 'string' || !m.content.trim() || m.content.length > 8000) {
+          return { error: 'Historique de conversation invalide.' };
+        }
+        total += m.content.length;
+        past.push({ role: m.role, content: m.content });
+      }
+      if (total > 60000) return { error: 'Historique de conversation trop long.' };
+    }
+    const options = { temperature };
+    if (numCtx !== undefined) {
+      if (!Number.isInteger(numCtx) || numCtx < 2048 || numCtx > 32768) return { error: 'Taille de contexte invalide (2048 à 32768).' };
+      options.num_ctx = numCtx;
+    }
+
+    const body = {
+      model: model.trim(),
+      messages: [{ role: 'system', content: system }, ...past, { role: 'user', content: prompt }],
+      stream: false,
+      think: false,
+      keep_alive: unload ? 0 : '5m',
+      options,
+    };
+    const post = () => fetch(`${base}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(120000),
+    });
+
+    let res;
+    try { res = await post(); } catch (e) { return { error: llmNetError(e, base) }; }
+    let data = await res.json().catch(() => null);
+    if (res.status === 400 && /think/i.test(data?.error || '')) {
+      delete body.think;
+      try { res = await post(); } catch (e) { return { error: llmNetError(e, base) }; }
+      data = await res.json().catch(() => null);
+    }
+    if (!res.ok) return { error: data?.error || `Ollama a répondu HTTP ${res.status}.` };
+    const text = llmCleanText(data?.message?.content);
+    if (!text) return { error: 'Réponse vide du modèle.' };
+    return { ok: true, text };
+  } catch (e) {
+    return { error: 'Erreur inattendue : ' + (e?.message || e) };
+  }
+});
+
+ipcMain.handle('llm:models', async (_, url) => {
+  try {
+    const base = llmBaseUrl(url);
+    if (!base) return { error: 'URL d\'Ollama invalide.' };
+    let res;
+    try { res = await fetch(`${base}/api/tags`, { signal: AbortSignal.timeout(10000) }); }
+    catch (e) { return { error: llmNetError(e, base) }; }
+    if (!res.ok) return { error: `Ollama a répondu HTTP ${res.status}.` };
+    const data = await res.json().catch(() => null);
+    const models = (data?.models || []).map(m => m?.name).filter(n => typeof n === 'string');
+    return { ok: true, models };
+  } catch (e) {
+    return { error: 'Erreur inattendue : ' + (e?.message || e) };
+  }
+});
 
 // ── IPC: auto-update ──────────────────────────────────────────────────────────
 autoUpdater.autoDownload = true;

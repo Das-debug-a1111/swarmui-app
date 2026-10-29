@@ -370,7 +370,60 @@
         <div class="prompt-wrap">
           <div class="prompt-label">
             Prompt
+            <button id="pai-toggle-btn" class="cs-toggle-btn pai-toggle-btn" title="Transformer une courte idée en prompt avec un LLM local (Ollama)">✨ Idée → prompt</button>
             <button id="cs-toggle-btn" class="cs-toggle-btn" title="Character Selector">Characters</button>
+          </div>
+          <div id="pai-panel" class="pai-panel" hidden>
+            <div class="pai-tabs">
+              <button id="pai-tab-idea" class="pai-tab active" type="button" data-tab="idea">Idée</button>
+              <button id="pai-tab-chat" class="pai-tab" type="button" data-tab="chat">Chat</button>
+            </div>
+            <div id="pai-pane-idea" class="pai-pane">
+              <label class="pai-label" for="pai-idea">Ton idée (quelques mots)</label>
+              <textarea id="pai-idea" class="prompt pai-idea" rows="2" maxlength="4000" placeholder="ex. une chevalière sous la pluie, néons de nuit…"></textarea>
+              <div class="pai-row">
+                <button id="pai-generate" class="btn-primary-sm" type="button">Générer le prompt</button>
+                <span id="pai-status" class="pai-status"></span>
+              </div>
+            </div>
+            <div id="pai-pane-chat" class="pai-pane" hidden>
+              <div id="pai-chat-list" class="pai-chat-list"></div>
+              <textarea id="pai-chat-input" class="prompt pai-idea" rows="3" maxlength="4000" placeholder="Colle un prompt et dis-moi comment l'adapter…"></textarea>
+              <div class="pai-row">
+                <button id="pai-chat-send" class="btn-primary-sm" type="button">Envoyer</button>
+                <button id="pai-chat-insert" class="btn-secondary" type="button">Insérer le prompt actuel</button>
+                <button id="pai-chat-new" class="btn-secondary" type="button">Nouvelle conversation</button>
+                <span class="pai-status">Ctrl/Cmd+Entrée pour envoyer</span>
+              </div>
+            </div>
+            <details class="pai-settings">
+              <summary>Réglages</summary>
+              <div class="pai-grid">
+                <label class="pai-label" for="pai-url">URL d'Ollama</label>
+                <input id="pai-url" class="inp" type="text" spellcheck="false" placeholder="http://localhost:11434">
+                <label class="pai-label" for="pai-model">Modèle</label>
+                <div class="pai-inline">
+                  <input id="pai-model" class="inp" type="text" list="pai-models" spellcheck="false" placeholder="eriktonon/qwen3.8-uncensored:9b">
+                  <datalist id="pai-models"></datalist>
+                  <button id="pai-detect" class="btn-secondary" type="button">Détecter</button>
+                </div>
+                <label class="pai-label" for="pai-temp">Température</label>
+                <input id="pai-temp" class="inp" type="number" min="0" max="2" step="0.1">
+                <label class="pai-label" for="pai-system">Prompt système</label>
+                <div class="pai-inline pai-top">
+                  <textarea id="pai-system" class="prompt pai-area" rows="6" spellcheck="false"></textarea>
+                  <button id="pai-reset" class="btn-secondary" type="button">Réinitialiser</button>
+                </div>
+                <label class="pai-label" for="pai-chat-system">Prompt système du chat</label>
+                <div class="pai-inline pai-top">
+                  <textarea id="pai-chat-system" class="prompt pai-area" rows="6" spellcheck="false"></textarea>
+                  <button id="pai-chat-reset" class="btn-secondary" type="button">Réinitialiser</button>
+                </div>
+                <label class="pai-label" for="pai-examples">Exemples (optionnel)</label>
+                <textarea id="pai-examples" class="prompt pai-area" rows="4" spellcheck="false" placeholder="Colle ici des prompts réussis, ajoutés au prompt système."></textarea>
+              </div>
+              <label class="pai-check"><input id="pai-unload" type="checkbox"> Décharger le modèle après chaque réponse (libère la VRAM pour SwarmUI ; en chat, le modèle est rechargé à chaque message)</label>
+            </details>
           </div>
           <textarea class="prompt prompt-main" id="inp-positive" rows="3"
             placeholder="Décris l'image que tu veux générer…"></textarea>
@@ -2512,6 +2565,7 @@
 <script src="src/twitter.js"></script>
 <script src="src/sidebarOrder.js"></script>
 <script src="src/pasteTargets.js"></script>
+<script src="src/promptai.js"></script>
 <script src="src/app.js"></script>
 </body>
 </html>
