@@ -544,7 +544,11 @@ const Inpaint = (() => {
     // File loading
     q('inp-toolbar-load').onclick = () => q('inp-file-input').click();
     q('inp-drop-btn').onclick     = () => q('inp-file-input').click();
-    q('inp-file-input').onchange  = e => { if (e.target.files[0]) loadFile(e.target.files[0]); };
+    q('inp-file-input').onchange  = e => {
+      const f = e.target.files[0];
+      e.target.value = '';
+      if (f) loadFile(f);
+    };
 
     // Drag & drop
     const ctr = q('inp-canvas-wrap');

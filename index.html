@@ -383,14 +383,28 @@
               <textarea id="pai-idea" class="prompt pai-idea" rows="2" maxlength="4000" placeholder="ex. une chevalière sous la pluie, néons de nuit…"></textarea>
               <div class="pai-row">
                 <button id="pai-generate" class="btn-primary-sm" type="button">Générer le prompt</button>
+                <button id="pai-translate" class="btn-secondary" type="button" title="Traduit ton idée en anglais">🌐 Anglais</button>
                 <span id="pai-status" class="pai-status"></span>
               </div>
             </div>
             <div id="pai-pane-chat" class="pai-pane" hidden>
               <div id="pai-chat-list" class="pai-chat-list"></div>
+              <div id="pai-chat-attach" class="pai-attach" hidden></div>
+              <div id="pai-extract" class="pai-row pai-extract" hidden>
+                <span class="pai-label">Depuis l'image</span>
+                <label class="pai-check"><input id="pai-ex-outfit" type="checkbox"> Tenue</label>
+                <label class="pai-check"><input id="pai-ex-bg" type="checkbox"> Décor</label>
+                <label class="pai-check"><input id="pai-ex-pose" type="checkbox"> Pose</label>
+                <label class="pai-check"><input id="pai-ex-light" type="checkbox"> Lumière et ambiance</label>
+                <label class="pai-check"><input id="pai-ex-merge" type="checkbox"> Fusionner dans mon prompt actuel</label>
+                <button id="pai-ex-run" class="btn-secondary" type="button">Extraire</button>
+              </div>
               <textarea id="pai-chat-input" class="prompt pai-idea" rows="3" maxlength="4000" placeholder="Colle un prompt et dis-moi comment l'adapter…"></textarea>
               <div class="pai-row">
                 <button id="pai-chat-send" class="btn-primary-sm" type="button">Envoyer</button>
+                <button id="pai-chat-translate" class="btn-secondary" type="button" title="Traduit ton message en anglais avant l'envoi">🌐 Anglais</button>
+                <button id="pai-chat-attach-btn" class="btn-secondary" type="button">📎 Image</button>
+                <input id="pai-chat-file" type="file" accept="image/*" hidden>
                 <button id="pai-chat-insert" class="btn-secondary" type="button">Insérer le prompt actuel</button>
                 <button id="pai-chat-new" class="btn-secondary" type="button">Nouvelle conversation</button>
                 <span class="pai-status">Ctrl/Cmd+Entrée pour envoyer</span>
@@ -407,6 +421,8 @@
                   <datalist id="pai-models"></datalist>
                   <button id="pai-detect" class="btn-secondary" type="button">Détecter</button>
                 </div>
+                <label class="pai-label" for="pai-translate-model">Modèle de traduction</label>
+                <input id="pai-translate-model" class="inp" type="text" list="pai-models" spellcheck="false" placeholder="vide = même modèle que ci-dessus">
                 <label class="pai-label" for="pai-temp">Température</label>
                 <input id="pai-temp" class="inp" type="number" min="0" max="2" step="0.1">
                 <label class="pai-label" for="pai-system">Prompt système</label>
@@ -432,6 +448,23 @@
           <textarea class="prompt prompt-neg" id="inp-negative" rows="1"
             placeholder="Negative prompt — ce qu'il faut éviter…"></textarea>
         </div>
+
+        <!-- Grille X/Y/Z -->
+        <details id="xyz-box" class="xyz-box">
+          <summary>▦ Grille X/Y/Z <span id="xyz-count" class="xyz-count"></span></summary>
+          <div class="xyz-help">Compare modèles, prompts, LoRA, steps… : une image par combinaison, assemblées en une grille légendée (même graine pour toutes les cases). Les autres réglages sont ceux de Txt2Img.</div>
+          <div class="xyz-axis"><label>Axe X</label><select class="inp" id="xyz-type-1"></select>
+            <input class="inp xyz-vals" id="xyz-vals-1" type="text" hidden><div class="xyz-pick" id="xyz-pick-1" hidden></div><div class="xyz-hint" id="xyz-hint-1"></div></div>
+          <div class="xyz-axis"><label>Axe Y</label><select class="inp" id="xyz-type-2"></select>
+            <input class="inp xyz-vals" id="xyz-vals-2" type="text" hidden><div class="xyz-pick" id="xyz-pick-2" hidden></div><div class="xyz-hint" id="xyz-hint-2"></div></div>
+          <div class="xyz-axis"><label>Axe Z</label><select class="inp" id="xyz-type-3"></select>
+            <input class="inp xyz-vals" id="xyz-vals-3" type="text" hidden><div class="xyz-pick" id="xyz-pick-3" hidden></div><div class="xyz-hint" id="xyz-hint-3"></div></div>
+          <div class="xyz-opts">
+            <label class="pai-check"><input id="xyz-labels" type="checkbox" checked> Légendes sur la grille</label>
+            <label class="pai-check"><input id="xyz-singles" type="checkbox"> Garder aussi chaque image dans la galerie</label>
+          </div>
+          <button id="xyz-run" class="btn-secondary" type="button" disabled>Lancer la grille</button>
+        </details>
 
         <!-- Action bar -->
         <div id="action-bar">
@@ -2567,5 +2600,6 @@
 <script src="src/pasteTargets.js"></script>
 <script src="src/promptai.js"></script>
 <script src="src/app.js"></script>
+<script src="src/xyzgrid.js"></script>
 </body>
 </html>

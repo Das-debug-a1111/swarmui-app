@@ -376,13 +376,21 @@ function llmCleanText(raw) {
 
 ipcMain.handle('llm:generate', async (_, opts) => {
   try {
-    const { url, model, system, prompt, temperature, unload, history, numCtx } = opts || {};
+    const { url, model, system, prompt, temperature, unload, history, numCtx, images } = opts || {};
     const base = llmBaseUrl(url);
     if (!base) return { error: 'URL d\'Ollama invalide.' };
     if (typeof model !== 'string' || !model.trim() || model.length > 200) return { error: 'Nom de modèle invalide.' };
     if (typeof system !== 'string' || !system.trim() || system.length > 20000) return { error: 'Prompt système (avec les exemples) vide ou trop long (max 20000 caractères).' };
-    if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 4000) return { error: 'Idée invalide (vide ou trop longue).' };
+    if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > 12000) return { error: 'Idée invalide (vide ou trop longue).' };
     if (typeof temperature !== 'number' || !Number.isFinite(temperature) || temperature < 0 || temperature > 2) return { error: 'Température invalide (0 à 2).' };
+
+    let imageCount = 0;
+    const checkImages = list => {
+      if (!Array.isArray(list) || list.length < 1 || list.length > 2) return false;
+      imageCount += list.length;
+      return list.every(b => typeof b === 'string' && b.length > 0 && b.length <= 8000000 && /^[A-Za-z0-9+/=]+$/.test(b));
+    };
+    if (images !== undefined && !checkImages(images)) return { error: 'Image invalide (1 à 2 images en base64).' };
 
     const past = [];
     if (history !== undefined) {
@@ -393,8 +401,14 @@ ipcMain.handle('llm:generate', async (_, opts) => {
           return { error: 'Historique de conversation invalide.' };
         }
         total += m.content.length;
-        past.push({ role: m.role, content: m.content });
+        const entry = { role: m.role, content: m.content };
+        if (m.images !== undefined) {
+          if (m.role !== 'user' || !checkImages(m.images)) return { error: 'Historique de conversation invalide (images).' };
+          entry.images = m.images;
+        }
+        past.push(entry);
       }
+      if (imageCount > 2) return { error: 'Trop d\'images dans la requête (2 maximum).' };
       if (total > 60000) return { error: 'Historique de conversation trop long.' };
     }
     const options = { temperature };
@@ -403,9 +417,12 @@ ipcMain.handle('llm:generate', async (_, opts) => {
       options.num_ctx = numCtx;
     }
 
+    if (imageCount > 2) return { error: 'Trop d\'images dans la requête (2 maximum).' };
+    const userMsg = { role: 'user', content: prompt };
+    if (images !== undefined) userMsg.images = images;
     const body = {
       model: model.trim(),
-      messages: [{ role: 'system', content: system }, ...past, { role: 'user', content: prompt }],
+      messages: [{ role: 'system', content: system }, ...past, userMsg],
       stream: false,
       think: false,
       keep_alive: unload ? 0 : '5m',
@@ -415,7 +432,7 @@ ipcMain.handle('llm:generate', async (_, opts) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(120000),
+      signal: AbortSignal.timeout(imageCount ? 180000 : 120000),
     });
 
     let res;
