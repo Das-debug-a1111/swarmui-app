@@ -78,6 +78,76 @@ const PromptAI = (() => {
     return Number.isFinite(t) ? Math.min(2, Math.max(0, t)) : DEFAULT_TEMP;
   }
 
+  // ── Aide à l'installation : Ollama absent / modèle pas téléchargé ───────────
+  const SMALL_MODELS = [
+    ['8 Go de VRAM ou plus', DEFAULT_MODEL + ' (celui par défaut : lit les images, sans filtre)'],
+    ['6 à 8 Go', 'qwen3-vl:4b ou gemma3:4b (lisent aussi les images, plus légers, parfois filtrés)'],
+    ['moins de 6 Go', 'qwen3:1.7b ou gemma3:1b (texte seulement, qualité limitée)'],
+  ];
+
+  function setupEl(tag, text, cls) {
+    const e = document.createElement(tag);
+    if (text) e.textContent = text;
+    if (cls) e.className = cls;
+    return e;
+  }
+  function setupLink(text, url) {
+    const a = setupEl('a', text);
+    a.href = url; a.target = '_blank'; a.rel = 'noopener';
+    return a;
+  }
+  function setupCmd(cmd) {
+    const row = setupEl('div', '', 'pai-setup-cmd');
+    row.appendChild(setupEl('code', cmd));
+    const b = setupEl('button', 'Copier', 'btn-secondary');
+    b.type = 'button';
+    b.addEventListener('click', () => {
+      navigator.clipboard?.writeText(cmd).then(() => { b.textContent = 'Copié ✓'; setTimeout(() => { b.textContent = 'Copier'; }, 1500); }).catch(() => {});
+    });
+    row.appendChild(b);
+    return row;
+  }
+
+  function showSetup(kind, model) {
+    const box = $('pai-setup');
+    if (!kind) { box.hidden = true; return; }
+    const body = $('pai-setup-body');
+    body.textContent = '';
+    if (kind === 'ollama') {
+      $('pai-setup-title').textContent = 'Ollama n\'est pas détecté';
+      body.appendChild(setupEl('p', 'Le chat et « Idée → prompt » utilisent un modèle de langage qui tourne chez toi, via Ollama (gratuit, rien n\'est envoyé sur Internet).'));
+      const ol = setupEl('ol');
+      const l1 = setupEl('li'); l1.append('Installe Ollama : ', setupLink('ollama.com/download', 'https://ollama.com/download'));
+      ol.appendChild(l1);
+      ol.appendChild(setupEl('li', 'Lance-le (il tourne en arrière-plan, icône dans la barre des tâches / de menu).'));
+      ol.appendChild(setupEl('li', 'Clique sur « Revérifier » : l\'app te dira s\'il manque le modèle.'));
+      body.appendChild(ol);
+      body.appendChild(setupEl('p', 'Ollama est sur un autre PC (ex. celui de SwarmUI) ? Change l\'URL dans Réglages, et lance-le avec la variable OLLAMA_HOST=0.0.0.0 pour qu\'il accepte le réseau local.', 'pai-setup-note'));
+      $('pai-setup-title').dataset.kind = 'ollama';
+    } else {
+      $('pai-setup-title').textContent = 'Modèle « ' + model + ' » pas encore téléchargé';
+      body.appendChild(setupEl('p', 'Ollama tourne bien, mais ce modèle n\'est pas installé. Ouvre un terminal et lance :'));
+      body.appendChild(setupCmd('ollama pull ' + model));
+      body.appendChild(setupEl('p', 'Le téléchargement fait plusieurs Go, une seule fois. Choisis selon ta carte graphique :'));
+      const ul = setupEl('ul');
+      SMALL_MODELS.forEach(([vram, name]) => ul.appendChild(setupEl('li', vram + ' : ' + name)));
+      body.appendChild(ul);
+      body.appendChild(setupEl('p', 'Un autre modèle que le défaut ? Écris son nom dans Réglages → Modèle. Catalogue : ollama.com/library', 'pai-setup-note'));
+      $('pai-setup-title').dataset.kind = 'model';
+    }
+    box.hidden = false;
+  }
+
+  async function checkSetup() {
+    try {
+      const r = await window.electronAPI.llmModels($('pai-url').value.trim() || DEFAULT_URL);
+      if (!r || r.error) { showSetup('ollama'); return; }
+      const want = $('pai-model').value.trim() || DEFAULT_MODEL;
+      const has = r.models.some(n => n === want || n === want + ':latest' || (!want.includes(':') && n.startsWith(want + ':')));
+      showSetup(has ? null : 'model', want);
+    } catch { showSetup('ollama'); }
+  }
+
   async function detect() {
     const btn = $('pai-detect');
     btn.disabled = true;
@@ -471,8 +541,10 @@ const PromptAI = (() => {
       const panel = $('pai-panel');
       panel.hidden = !panel.hidden;
       toggle.classList.toggle('active', !panel.hidden);
-      if (!panel.hidden) focusActive();
+      if (!panel.hidden) { focusActive(); checkSetup(); }
     });
+    $('pai-setup-recheck').addEventListener('click', checkSetup);
+    $('pai-model').addEventListener('change', () => { if (!$('pai-panel').hidden) checkSetup(); });
 
     ['url', 'model', 'translate-model', 'temp', 'system', 'examples', 'idea', 'chat-system'].forEach(k =>
       $('pai-' + k).addEventListener('input', e => save(k, e.target.value)));
