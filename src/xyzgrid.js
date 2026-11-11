@@ -21,6 +21,11 @@ const XYZGrid = (() => {
     { id: 'sampler', label: 'Sampler', list: () => optValues('sel-sampler') },
     { id: 'scheduler', label: 'Scheduler', list: () => optValues('sel-scheduler') },
     { id: 'vae', label: 'VAE', list: () => optValues('sel-vae') },
+    { id: 'size', label: 'Taille', hint: 'LxH séparées par des virgules — ex : 1024x1024, 1024x1344' },
+    { id: 'refiner', label: 'Hires : bascule', hint: 'off = sans hires ; sinon la force (0 à 1) — ex : off, 0.35, 0.4, 0.5' },
+    { id: 'refscale', label: 'Hires : agrandissement', hint: 'ex : 1.25, 1.5, 2' },
+    { id: 'refmethod', label: 'Hires : upscaler', list: () => optValues('sel-refiner-method') },
+    { id: 'refmodel', label: 'Hires : modèle', list: () => optValues('sel-refiner-model') },
   ];
   const axisDef = id => AXES.find(a => a.id === id) || AXES[0];
   const LORA_TAG = /<lora:[^>]*>/gi;
@@ -84,8 +89,44 @@ const XYZGrid = (() => {
   // ── Application d'une valeur sur la requête ─────────────────────────────────
   function shortName(v) { return String(v).split(/[\\/]/).pop().replace(/\.(safetensors|ckpt|gguf|pt)$/i, ''); }
 
+  // Active le hires (refiner) avec les réglages courants de l'interface si la requête de base n'en a pas
+  function ensureRefiner(payload) {
+    if ('refinercontrolpercentage' in payload) return;
+    const num = (id, def) => { const v = parseFloat($(id)?.value); return Number.isNaN(v) ? def : v; };
+    payload.refinermethod = 'PostApply';
+    payload.refinerupscale = num('inp-refiner-scale', 1.5) || 1.5;
+    payload.refinercontrolpercentage = num('inp-refiner-pct', 0.4);
+    payload.refinerupscalemethod = $('sel-refiner-method')?.value || 'pixel-lanczos';
+    payload.refinersteps = parseInt($('inp-refiner-steps')?.value, 10) || 15;
+    payload.refinercfgscale = num('inp-refiner-cfg', payload.cfgscale || 7);
+    const rm = $('sel-refiner-model')?.value;
+    if (rm) payload.refinermodel = rm;
+  }
+
   function applyValue(payload, base, axis, value) {
     switch (axis.type) {
+      case 'size': {
+        const m = String(value).match(/^\s*(\d+)\s*[x×]\s*(\d+)\s*$/i);
+        if (m) { payload.width = parseInt(m[1], 10); payload.height = parseInt(m[2], 10); }
+        break;
+      }
+      case 'refiner':
+        if (/^(off|non|sans|0)$/i.test(String(value).trim())) {
+          Object.keys(payload).filter(k => k.startsWith('refiner')).forEach(k => delete payload[k]);
+        } else {
+          ensureRefiner(payload);
+          const v = parseFloat(value);
+          if (Number.isFinite(v)) payload.refinercontrolpercentage = Math.min(1, Math.max(0, v));
+        }
+        break;
+      case 'refscale': {
+        ensureRefiner(payload);
+        const v = parseFloat(value);
+        if (Number.isFinite(v) && v > 0) payload.refinerupscale = v;
+        break;
+      }
+      case 'refmethod': ensureRefiner(payload); payload.refinerupscalemethod = value; break;
+      case 'refmodel':  ensureRefiner(payload); payload.refinermodel = value; break;
       case 'model':     payload.model = value; break;
       case 'vae':       payload.vae = value; break;
       case 'sampler':   payload.sampler = value; break;
@@ -110,7 +151,10 @@ const XYZGrid = (() => {
   }
 
   function cellLabel(axis, value) {
-    if (axis.type === 'model' || axis.type === 'lora') return value ? shortName(value) : '(aucun)';
+    if (axis.type === 'model' || axis.type === 'lora' || axis.type === 'refmodel') return value ? shortName(value) : '(aucun)';
+    if (axis.type === 'refmethod') return shortName(value).replace(/^model-/, '');
+    if (axis.type === 'refiner') return /^(off|non|sans|0)$/i.test(String(value).trim()) ? 'sans hires' : `hires ${value}`;
+    if (axis.type === 'refscale') return `×${value}`;
     if (axis.type === 'prompt' || axis.type === 'neg') return value || '(vide)';
     return String(value);
   }

@@ -3591,3 +3591,77 @@ details.pi-raw[open] > summary > span::before { transform: rotate(90deg); }
 .pai-setup-note { font-size: 11px; color: var(--muted); }
 .pai-setup-cmd { display: flex; gap: 8px; align-items: center; }
 .pai-setup-cmd code { flex: 1; padding: 5px 8px; border-radius: 6px; background: var(--bg); border: 1px solid var(--border); user-select: text; overflow-x: auto; white-space: nowrap; }
+
+/* ── Production (BD + small sets) ─────────────────────────────────────────────────────────────── */
+#view-bd {
+  display: none; position: fixed; top: var(--topbar-h); left: 0; right: 0; bottom: 0; z-index: 50;
+  background: var(--bg); grid-template-columns: 360px minmax(0, 1fr);
+}
+#view-bd.active { display: grid; }
+#bd-left { overflow-y: auto; border-right: 1px solid var(--border); padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; background: var(--bg2); }
+#bd-left .bd-sec { display: flex; flex-direction: column; gap: 6px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+#bd-left .bd-sec h3 { font-size: 12px; font-weight: 600; color: var(--text); }
+#bd-left summary { cursor: pointer; font-size: 12px; color: var(--text2); user-select: none; }
+#bd-left textarea, #bd-left .inp { width: 100%; }
+.bd-grid { display: grid; grid-template-columns: minmax(90px, max-content) 1fr; gap: 6px 10px; align-items: center; }
+.bd-char { display: flex; flex-direction: column; gap: 4px; padding: 6px; margin-bottom: 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+.bd-char-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+#bd-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 8px 14px; gap: 8px; }
+.bd-tabs { align-items: center; flex: 0 0 auto; }
+.bd-status { margin-left: auto; }
+.bd-pane { display: flex; flex-direction: column; gap: 8px; flex: 1; min-height: 0; }
+.bd-pane[hidden] { display: none; }
+.bd-chat-list {
+  display: flex; flex-direction: column; gap: 8px; flex: 1; min-height: 120px; overflow-y: auto;
+  padding: 8px; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.bd-bubble { user-select: text; }
+.bd-toolbar { flex: 0 0 auto; }
+.bd-board { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; padding-right: 4px; }
+.bd-empty, .bd-warn { font-size: 12px; color: var(--muted); padding: 14px; border: 1px dashed var(--border); border-radius: 8px; }
+.bd-warn { color: var(--orange); border-color: var(--orange); }
+.bd-page { display: flex; flex-direction: column; gap: 8px; }
+.bd-page-head { display: flex; align-items: center; gap: 10px; font-size: 13px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+.bd-case { display: flex; flex-direction: column; gap: 5px; padding: 8px; border: 1px solid var(--border); border-left: 4px solid var(--border2); border-radius: 8px; background: var(--bg2); }
+.bd-case.state-kept { border-left-color: var(--accent); }
+.bd-case.state-inpaint { border-left-color: var(--orange); }
+.bd-case.state-done { border-left-color: var(--green); }
+.bd-case-top { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.bd-case-n { font-size: 12px; font-weight: 600; min-width: 52px; }
+.bd-chars-in { flex: 1 1 140px; min-width: 100px; }
+.bd-shot-in { flex: 0 1 120px; min-width: 80px; }
+.bd-state { flex: 0 0 110px; }
+.bd-num { display: flex; align-items: center; gap: 4px; font-size: 10px; color: var(--muted); }
+.bd-num .inp { width: 58px; }
+.bd-case textarea, .bd-case .inp { width: 100%; }
+.bd-case-top .inp { width: auto; }
+.bd-case-actions { display: flex; gap: 6px; }
+.bd-plan { overflow-y: auto; display: flex; flex-direction: column; gap: 12px; flex: 1; min-height: 0; }
+.bd-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 8px; }
+.bd-card { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg2); }
+.bd-card b { font-size: 20px; font-variant-numeric: tabular-nums; }
+.bd-card span { font-size: 11px; color: var(--muted); }
+.bd-card.warn { border-color: var(--orange); }
+.bd-table { border-collapse: collapse; font-size: 12px; width: 100%; }
+.bd-table th, .bd-table td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+.bd-table th { color: var(--muted); font-weight: 600; font-size: 11px; }
+.bd-table tr.today td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.bd-note { font-size: 11px; color: var(--muted); }
+.bd-weekend, .bd-advice { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg2); font-size: 12px; color: var(--text2); }
+.bd-row { display: flex; gap: 8px; }
+@media (max-width: 900px) { #view-bd.active { grid-template-columns: 1fr; } #bd-left { max-height: 40vh; } }
+#view-bd [hidden] { display: none !important; }
+.bd-text { border-color: color-mix(in srgb, var(--purple) 50%, var(--border)); }
+.bd-kw { display: contents; }
+.bd-weekview { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg2); font-size: 12px; }
+.bd-queued { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--muted); }
+.bd-strip { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0; }
+.bd-thumb { flex: 0 0 auto; height: 150px; border: 2px solid var(--border); border-radius: 6px; overflow: hidden; cursor: pointer; background: var(--bg); }
+.bd-thumb img { height: 100%; width: auto; display: block; }
+.bd-thumb:hover { border-color: var(--border2); }
+.bd-thumb.picked { border-color: var(--green); box-shadow: 0 0 0 1px var(--green); }
+.bd-lb { position: fixed; inset: 0; z-index: 1000; background: rgba(0, 0, 0, .88); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; }
+.bd-lb img { max-width: 92vw; max-height: 86vh; object-fit: contain; }
+.bd-lb-cap { color: #ddd; font-size: 12px; }
+.bd-caption-row { display: flex; gap: 8px; align-items: flex-start; }
+.bd-caption-row .bd-caption { flex: 1; width: 100%; }

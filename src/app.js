@@ -225,6 +225,8 @@ async function loadLoRAs() {
   const d = await API.listLoRAs();
   App.loraModels = d.files || d.models || [];
   refreshLoraChoices();
+  // LoRA non classés par SwarmUI : on lit leur en-tête (Anima, Krea 2…), puis on réaffiche les listes
+  API.inferLoraFamilies(App.loraModels).then(() => refreshLoraChoices()).catch(e => console.warn('inferLoraFamilies:', e));
   return App.loraModels.length;
 }
 
@@ -1042,6 +1044,7 @@ const FAMILY_LABELS = {
   'flux-1': 'Flux.1',
   'flux-2': 'Flux.2',
   'krea-2': 'Krea 2',
+  'anima': 'Anima',
   'qwen-image': 'Qwen Image',
   'qwen-image-2.1': 'Qwen Image 2.1',
 };
@@ -1050,6 +1053,7 @@ const UNKNOWN_FAMILY = '?';
 // Fallback when SwarmUI couldn't classify the file (e.g. LoRAs without recognisable keys): read the name/title
 const FAMILY_GUESSES = [
   [/krea/i, 'krea-2'],
+  [/anima|2b\b/i, 'anima'],   // Anima = modèle 2B : les LoRA non classés dont le nom finit par « 2B » sont des LoRA Anima
   [/flux/i, 'flux-1'],
   [/illustrious|noob|pony|sdxl|\bxl\b/i, 'stable-diffusion-xl-v1'],
 ];
@@ -1057,6 +1061,8 @@ const FAMILY_GUESSES = [
 function modelFamily(f) {
   let id = f.compat_class || '';
   let guessed = false;
+  // SwarmUI classe parfois mal un LoRA Anima (ex. « breast_implants_anima_v2 » vu comme SD 1.5) : le nom l'emporte
+  if (id === 'stable-diffusion-v1' && /anima/i.test(`${f.name} ${f.title || ''}`)) { id = 'anima'; guessed = true; }
   if (!id) {
     const text = `${f.name} ${f.title || ''} ${f.description || ''}`;
     const hit = FAMILY_GUESSES.find(([re]) => re.test(text));
@@ -2309,6 +2315,7 @@ function switchTab(tab) {
   const isInp   = tab === 'inpaint';
   const isSch   = tab === 'scheduler';
   const isPng   = tab === 'pnginfo';
+  const isBd    = tab === 'bd';
   const isComic = tab === 'comic';
   const isTw    = tab === 'twitter';
   const isMdl   = tab === 'models';
@@ -2318,6 +2325,7 @@ function switchTab(tab) {
   $('view-inpaint').classList.toggle('active', isInp);
   $('view-scheduler').classList.toggle('active', isSch);
   $('view-pnginfo').classList.toggle('active', isPng);
+  $('view-bd').classList.toggle('active', isBd);
   $('view-comic').classList.toggle('active', isComic);
   $('view-twitter').classList.toggle('active', isTw);
   $('view-models').classList.toggle('active', isMdl);
@@ -2325,6 +2333,7 @@ function switchTab(tab) {
   if (isFlux)  { Flux.init(); Flux.onShow(); }
   if (isInp)   { Inpaint.init(); Inpaint.onShow(); }
   if (isSch)   { Scheduler.init(); Scheduler.onShow(); setSchedulerMode(localStorage.getItem('sch-mode') || 'gen'); }
+  if (isBd)    { BD.init(); BD.onShow(); }
   if (isComic) { Comic.init(); Comic.onShow(); }
   if (isTw)    { Watermark.init(); Twitter.init(); Twitter.onShow(); }   // le filigrane vit dans l'onglet Twitter
   if (isMdl)   { ModelDL.onShow(); }

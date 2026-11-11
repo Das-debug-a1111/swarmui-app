@@ -181,6 +181,7 @@ const Scheduler = (() => {
     try {
       const d = await API.listLoRAs();
       S.loraModels = d.files || d.models || [];
+      await API.inferLoraFamilies(S.loraModels);
     } catch (e) { console.warn('[Scheduler] LoRAs:', e); }
   }
 
@@ -668,6 +669,7 @@ const Scheduler = (() => {
             task.thumb = src;
             S.run.doneImgs++;
             addToGallery(src, task.name, task.group || '');
+            if (task.bdRef) document.dispatchEvent(new CustomEvent('scheduler:image', { detail: { src, name: task.name, group: task.group || '', bdRef: task.bdRef } }));
             updateGlobal(doneTasks + failed);
             renderTaskProgress(task);
             save();
@@ -995,6 +997,7 @@ const Scheduler = (() => {
       source:  d.source  || null,
       payload: d.payload || null,
       state:   d.state   || null,
+      bdRef:   d.bdRef   || null,   // { pid, cid } : case de l'onglet Production à qui rendre les images
     };
   }
 
@@ -1009,10 +1012,10 @@ const Scheduler = (() => {
     };
   }
 
-  async function addSnapshotTask({ source, name, payload, state, thumb = null, group = '' }) {
+  async function addSnapshotTask({ source, name, payload, state, thumb = null, group = '', bdRef = null }) {
     await init();
     const task = makeTask({
-      type: 'snapshot', source, name, group, thumb,
+      type: 'snapshot', source, name, group, thumb, bdRef,
       payload: structuredClone(payload), state: structuredClone(state),
       count: +payload.images || 1,
       ...mirrorFromPayload(payload, state),

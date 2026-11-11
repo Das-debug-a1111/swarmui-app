@@ -33,6 +33,60 @@ const API = {
     });
   },
 
+  // ── Famille d'un LoRA lue dans l'en-tête du fichier (quand SwarmUI ne le classe pas) ──
+  async getModelHeaders(name, subtype = 'LoRA') {
+    return this.post('/API/GetModelHeaders', { session_id: this.session, model: name, subtype });
+  },
+
+  // Renvoie l'id de famille (compat_class SwarmUI) déduit de l'en-tête safetensors, ou '' si indéterminé
+  classifyLoraHeader(h) {
+    if (!h || typeof h !== 'object') return '';
+    const meta = h.__metadata__ || {};
+    const keys = Object.keys(h).filter(k => k !== '__metadata__');
+    // 1) métadonnées déclarées par l'outil d'entraînement
+    const declared = `${meta['modelspec.architecture'] || ''} ${meta.ss_base_model_version || ''} ${meta.base || ''} ${meta.ss_network_module || ''}`.toLowerCase();
+    if (/anima/.test(declared)) return 'anima';
+    if (/krea[-_ ]?2/.test(declared)) return 'krea-2';
+    // 2) noms de couches (DiT Cosmos d'Anima : blocks.N.adaln_modulation / cross_attn / self_attn)
+    if (keys.some(k => /blocks[._]\d+[._](adaln_modulation|cross_attn|self_attn)/.test(k))) return 'anima';
+    if (keys.some(k => /transformer[._]transformer_blocks[._]\d+[._]attn[._]to_gate/.test(k))) return 'krea-2';
+    if (keys.some(k => /^blocks\.\d+\.attn\.(gate|wk)\./.test(k))) return 'krea-2';
+    if (keys.some(k => /(up|down)_blocks[._]\d+[._]attentions/.test(k))) return 'stable-diffusion-xl-v1';
+    return '';
+  },
+
+  // Complète compat_class des LoRA que SwarmUI n'a pas classés (ou a classés SD 1.5 par erreur).
+  // Résultat mis en cache par hash du fichier : un LoRA n'est lu qu'une fois.
+  async inferLoraFamilies(files) {
+    const KEY = 'swarm-lora-family';
+    let cache = {};
+    try { cache = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch {}
+    const todo = [];
+    for (const f of files) {
+      if (f.compat_class && f.compat_class !== 'stable-diffusion-v1') continue;
+      const id = f.hash_sha256 || f.hash || f.name;
+      if (id in cache) { if (cache[id]) { f.compat_class = cache[id]; f.family_from_header = true; } continue; }
+      todo.push([f, id]);
+    }
+    let i = 0, dirty = false;
+    const worker = async () => {
+      while (i < todo.length) {
+        const [f, id] = todo[i++];
+        try {
+          const r = await this.getModelHeaders(f.name);
+          if (r && r.headers) {
+            const fam = this.classifyLoraHeader(r.headers);
+            cache[id] = fam; dirty = true;
+            if (fam) { f.compat_class = fam; f.family_from_header = true; }
+          }
+        } catch (e) { /* droit manquant ou fichier illisible : on garde la classe d'origine */ }
+      }
+    };
+    await Promise.all([worker(), worker(), worker()]);
+    if (dirty) { try { localStorage.setItem(KEY, JSON.stringify(cache)); } catch {} }
+    return files;
+  },
+
   async listVAEs()       { return this.listModels({ subtype: 'VAE',        depth: 5 }); },
   async listLoRAs()      { return this.listModels({ subtype: 'LoRA',        depth: 5 }); },
   async listEmbeddings() { return this.listModels({ subtype: 'Embedding',   depth: 5 }); },

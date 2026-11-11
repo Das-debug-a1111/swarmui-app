@@ -388,7 +388,7 @@ const Watermark = (() => {
     });
     $('wm-quality-val').textContent = $('wm-quality').value + '%';
     $('wm-export').addEventListener('click', exportCurrent);
-    $('wm-export-all').addEventListener('click', exportAllZip);
+    $('wm-export-all').addEventListener('click', () => exportAllZip());
     $('wm-copy').addEventListener('click', copyImage);
   }
 
@@ -468,8 +468,9 @@ const Watermark = (() => {
     }
   }
 
-  async function exportAllZip() {
-    if (!S.images.length) { toast('Aucune image à exporter'); return; }
+  // entries / label / suffix : pour l'onglet Production (pack Twitter). Sans argument : toutes les images de la liste.
+  async function exportAllZip(entries = S.images, label = '', suffix = true) {
+    if (!entries.length) { toast('Aucune image à exporter'); return; }
     const btn = $('wm-export-all');
     const original = btn.textContent;
     btn.disabled = true;
@@ -479,14 +480,15 @@ const Watermark = (() => {
       const format = $('wm-export-format').value === 'jpg' ? 'jpg' : 'png';
       const used = new Set();
       let n = 0, failed = 0;
-      for (const entry of S.images) {
+      for (const entry of entries) {
         try {
           const canvas = await buildWatermarkedCanvasFor(entry);
           const dataUrl = canvasToDataUrl(canvas);
           const base64  = dataUrl.split(',')[1];
           const base    = (entry.name || `image_${n + 1}`).replace(/\.[^.]+$/, '');
-          let fname = `${base}_watermarked.${format}`;
-          for (let k = 2; used.has(fname.toLowerCase()); k++) fname = `${base}_watermarked-${k}.${format}`;
+          const sfx = suffix ? '_watermarked' : '';
+          let fname = `${base}${sfx}.${format}`;
+          for (let k = 2; used.has(fname.toLowerCase()); k++) fname = `${base}${sfx}-${k}.${format}`;
           used.add(fname.toLowerCase());
           zip.file(fname, base64, { base64: true });
           n++;
@@ -496,7 +498,7 @@ const Watermark = (() => {
       const blob = await zip.generateAsync({ type: 'blob' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = `watermarked_${Date.now()}.zip`;
+      a.download = `${label || 'watermarked_' + Date.now()}.zip`;
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 60000);
       toast(`✅ ${n} image${n > 1 ? 's' : ''} exportée${n > 1 ? 's' : ''}` + (failed ? ` — ⚠️ ${failed} en échec` : ''));
@@ -529,5 +531,17 @@ const Watermark = (() => {
     });
   }
 
-  return { init, loadFromSrc, relayout };
+  // Une image prête pour le filigrane, sans l'ajouter à la liste (utilisé par l'onglet Production)
+  async function entryFromSrc(url, { name } = {}) {
+    if (!url.startsWith('data:')) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      url = await fileToDataUrl(await res.blob());
+    }
+    return { id: genId(), name: name || 'image-' + Date.now(), dataUrl: url, override: null };
+  }
+  const isConfigured = () => (S.logoEnabled && !!S.wmB64) || (S.textEnabled && !!S.text.content);
+  const exportEntries = (entries, label) => exportAllZip(entries, label, false);
+
+  return { init, loadFromSrc, relayout, entryFromSrc, isConfigured, exportEntries };
 })();
