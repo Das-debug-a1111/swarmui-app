@@ -117,6 +117,10 @@ npm run build:linux   # .AppImage
 
 Output goes to the `dist/` folder. Pushing a `v*` tag builds all three on GitHub Actions and publishes a release.
 
+## Credits
+
+The bundled character list, thumbnails and tag assist (`assets/data/wai_*`) come from [mirabarukaso/character_select_stand_alone_app](https://github.com/mirabarukaso/character_select_stand_alone_app) and its [Hugging Face dataset](https://huggingface.co/datasets/flagrantia/character_select_stand_alone_app) (`waiIllustriousSDXL_v160`, MIT license).
+
 ## License
 
 MIT

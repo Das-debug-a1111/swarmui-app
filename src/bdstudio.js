@@ -615,8 +615,12 @@ const BD = (() => {
       voice.placeholder = P.kind === 'social' ? 'Ton des légendes : complice, drôle, élégante, tutoie ses abonnés…' : 'Voix pour le lettrage : soumise ou totale salope, comment elle gémit… / futa douce et câline, ou dominante et dirty talk…';
       voice.addEventListener('input', () => { c.voice = voice.value; save(); });
       voice.hidden = !(lettOn() || P.kind === 'social');
+      tags.id = 'bd-char-tags-' + c.id;   // le sélecteur de personnages (onglet Txt2Img) écrit dans un champ repéré par son id
       const actions = el('div', 'bd-char-actions');
       actions.append(
+        ...(P.target === 'krea' || typeof CharSelector === 'undefined' ? [] : [
+          miniBtn('👤 Choisir dans Personnages', () => { CharSelector.toggleFor(tags.id); }),
+        ]),
         miniBtn('✨ Tags depuis la description', async b => {
           if (busy) return;
           const text = (c.desc || '').trim() || (c.name || '').trim();
