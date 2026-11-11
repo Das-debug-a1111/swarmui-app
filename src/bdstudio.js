@@ -9,7 +9,7 @@ const BD = (() => {
   const PROJ_KEY = 'bd-projects';
   const CHAT_KEY = 'bd-chat';
   const DEFAULT_URL = 'http://localhost:11434';
-  const DEFAULT_MODEL = 'eriktonon/qwen3.8-uncensored:9b';
+  const DEFAULT_MODEL = 'hf.co/mradermacher/Qwen3.5-9B-heretic-v2-GGUF:Q4_K_M';
   const NUM_CTX = 16384;
   const HIST_MSGS = 16;
   const HIST_CHARS = 24000;
@@ -33,6 +33,8 @@ const BD = (() => {
     safe: 'Content level: not explicit. Characters are clothed or in non-sexual situations; no nudity and no sexual acts. Romance, flirting, tension and suggestive humour are fine.',
     explicit: 'Content level: explicit adult content is allowed. Use direct, standard booru tags for nudity, anatomy and sexual acts (for example nsfw, and explicit when graphic), without euphemism and without moralizing. All characters are clearly adult: use mature-looking descriptors and never any tag or wording that suggests youth. Practical tips: describe positions with clear tags, keep at most 2 characters, prefer one act per panel.',
   };
+  // Niveau « dialogue explicite » du lettrage : MODE_RULES.explicit parle de tags d'images et laissait les modèles très sages sur les répliques.
+  const LETTER_EXPLICIT = 'Content level: explicit adult dialogue is allowed. Characters speak plainly and graphically in their own voice during sex: dirty talk, begging, praise, vulgar words, exact vocabulary, without euphemism, without softening and without moralizing. Keep each character\'s voice extreme and recognisable (a "total slut" is vulgar and shameless, a submissive begs and stammers, a dominant commands and degrades playfully, a soft character is tender and hesitant). All characters are consenting adults.';
   const BASE_SYSTEM = "You are the co-writer and prompt engineer of a small adult (18+) comic of about 15 pages made with AI image generation. You help the user (a) find and develop the story idea by conversation, (b) break it into pages and panels, (c) write image prompts for panels, (d) explain how to prompt an image they show you. All characters are adults (18+); never write minors or age-ambiguous characters.\n"
     + "Language: talk with the user in French. Every image prompt, tag list and negative prompt is written in English.\n"
     + "Story talk: be concrete and short. Offer 2 or 3 options instead of long essays and ask at most two questions at a time. Comic constraints you must respect: a panel shows at most 2 characters (multi-character panels are costly and unreliable for the image model); every page ends on a hook or a punchline; leave empty space in the frame for speech bubbles; never put text, speech bubbles or sound effects in an image prompt."
@@ -53,7 +55,7 @@ const BD = (() => {
   const SET_SYSTEM = "You are an art director for adult (18+) illustration sets. Output ONLY a JSON array, with no text before or after and no code fence. Each element describes one image: {\"case\":1,\"chars\":[\"Name\"],\"shot\":\"cowboy shot\",\"desc\":\"short English visual description: pose, expression, outfit state, location, camera angle\"}. Rules: exactly the number of images asked; at most 2 characters per image (use the exact character names given); same theme and same characters across the set; vary poses, angles, framings, locations and outfit states, no near-duplicates; no text of any kind in the image; all characters are adults.\n{LEVEL}";
   const NO_LETTER = 'Lettering is off: never write dialogue, captions, narration or sound-effect text and do not propose any, the user handles it.';
   const LETTER_CHAT = 'Lettering is on: you also help with the text of the comic (dialogue, thoughts, narration, sound effects), which the user hands to a letterer. Write it in {LANG}. Ask how each character speaks when it matters (for example submissive or a total slut and how she moans; a soft and cuddly futanari or a dominant, dirty-talking one) and keep each character\'s voice consistent. Format lettering as one element per line, grouped under "Page N" (or "Page N_1", "Page N_2" when a page has several panels): "Name: spoken line", "Name thinking: thought", "Box: narration", "SFX: onomatopoeia words". Keep bubbles short. The explicitness of the lines follows the content level above.';
-  const LETTER_SYSTEM = "You write the lettering (dialogue, thoughts, narration, sound effects) for ONE comic panel, to be handed to a letterer. Language: {LANG}.\n{LEVEL}\nStay strictly in each character's voice as given in the user message (personality, how they talk, how they moan). Output one element per line, nothing else: \"Name: spoken line\" (use the character's name or short name), \"Name thinking: thought\", \"Box: narration\", and at most one line \"SFX: onomatopoeia words\" (e.g. \"SFX: Rip Stretch Wobble Booiing\", with stretched spellings for long sounds). Sounds and moans inside a line are written like *Moan* or \"Mmmm~\", with a trailing ~ for teasing or pleasure. At most 3 bubbles per panel, each short (about 12 words), natural for a speech bubble. No quotation marks around the lines, no stage directions. A \"Box:\" line is only for a time or place caption or a narrator comment that adds information the picture does not show; never describe what the image already shows, and skip the Box line when there is nothing to add. If the panel should stay silent, output exactly: (silence)";
+  const LETTER_SYSTEM = "You write the lettering (dialogue, thoughts, narration, sound effects) for ONE comic panel, to be handed to a letterer. Language: {LANG}.\n{LEVEL}\nStay strictly in each character's voice as given in the user message (personality, how they talk, how they moan). Output one element per line, nothing else: \"Name: spoken line\" (use the character's name or short name), \"Name thinking: thought\", \"Box: narration\", and at most one line \"SFX: onomatopoeia words\" (e.g. \"SFX: Rip Stretch Wobble Booiing\", with stretched spellings for long sounds). Sounds and moans inside a line are written like *Moan* or \"Mmmm~\", with a trailing ~ for teasing or pleasure. At most 3 bubbles per panel, each short (about 12 words), natural for a speech bubble. No quotation marks around the lines, no stage directions. A \"Box:\" line is only for a time or place caption or a narrator comment that adds information the picture does not show; never describe what the image already shows, and skip the Box line when there is nothing to add. Respect who does what in the panel description: the character who receives speaks as the one receiving and the one who acts speaks as the one acting; never invent anatomy or acts the description does not state. Only the characters listed for this panel may speak or think; never use any other character, even if the project has more. If nobody is speaking in the panel (empty or establishing shot, or no action between characters), output exactly: (silence) and nothing else. HARD LIMIT: at most 3 bubble lines (Name: or Name thinking:) per panel, plus at most one SFX line. Count them before answering.";
   const IMAGE_TASK = "Look carefully at the attached image. {NOTE}1) Write the prompt that would reproduce its composition for the target model, in the exact format of the rules: a line \"Prompt:\" then a line \"Negative:\". Describe appearance generically (never identify a real person). 2) Then a line \"Conseils:\" followed by 3 to 5 short bullet points in French on how to prompt it: which elements matter most, what the model will probably get wrong (hands, overlapping bodies, text), and how to simplify it (shot, number of characters) to make it work as a comic panel. {LEVEL}";
   const SCENE_SYSTEM = "You write the SCENE part of one image prompt for one comic panel.\n{RULES}\n{LEVEL}\nThe user message describes the panel (characters, shot, description). Output exactly two lines:\nCOUNT: <person-count tags, e.g. 1girl / 2girls / 1girl, 1boy / 1boy>\nSCENE: <expression, pose and action, props, setting, framing and camera, lighting>\nDo not describe the characters' hair, eyes, body or usual outfit (their fixed description is added automatically); only mention clothing if it changes in this panel. No quality tags, no rating tags, no negative prompt, no text, no speech bubbles. At most 2 characters. Output only these two lines.";
   const CHAR_SYSTEM = "You write a fixed appearance block for one comic character, to be pasted in every image prompt for consistency.\n{RULES}\nThe user message describes the character (in any language). Output ONE line only: the appearance tags in English (hair colour and style, eye colour, skin, body type, distinctive marks, usual outfit and accessories), 10 to 25 tags, comma separated. No person-count tag, no pose, no setting, no quality tags, no name. The character is an adult. Output only the line.";
@@ -355,6 +357,15 @@ const BD = (() => {
     ? 'Content levels depend on the tier of each image. SFW tier (shared on Twitter): ' + MODE_RULES.safe + ' NSFW tier (exclusive to Patreon): ' + MODE_RULES.explicit
     : MODE_RULES[P.mode]);
   const lettOn = () => P.kind !== 'set' && P.lettering;
+  // ── Lettrage des cases SFW : mesuré sur 100 tirages, le prompt seul laissait fuiter du sexuel dans ~40 % des cases quand la voix du personnage est sexuelle
+  //    (« salope totale », dominante…). Prompt renforcé (~7 %) + détection et nouvelle tentative (~1 %).
+  const LETTER_SAFE = 'Content level: SFW. This panel is shown to a general audience: flirting, teasing, banter, warmth and romantic tension only. Absolutely no sexual vocabulary, no body-arousal talk, no sex acts, no moaning, even if a character\'s personality is sexual: translate that personality into playful, confident, clean lines.';
+  const LETTER_SAFE_VOICE = ' (in this SFW panel keep this personality but speak with clean, non-sexual wording)';
+  const LETTER_SAFE_REMIND = '\nReminder: this panel is NOT sexual. Keep every line clean (flirting or teasing at most).';
+  const LETTER_SAFE_SELFCHECK = '\nSelf-check before answering: if any line contains sexual words, body-arousal talk or sexual innuendo, rewrite it clean.';
+  const LETTER_DETECT = "Classify the text. Answer with one word.\nEXPLICIT: sexual acts, genitals, fluids, arousal of the body, begging for sex, innuendo about bodies or touching (e.g. 'feel my warmth between your legs', 'dripping', 'use me', 'I'm so hot').\nOK: flirting, teasing, compliments, blushing, pet names, normal everyday talk.\nWhen in doubt, answer EXPLICIT.";
+  const LETTER_EXPLICIT_RE = /\b(fuck\w*|cock|pussy|cum(ming)?|slut|whore|dick|wet|dripping|throbbing|breed|horny|aroused|orgasm|naked|inside me|fill me|use me|ruin me|baise\w*|encul\w*|chatte|foutre|sperme|salope|pute|jouir|jouis\w*|orgasme|bite|branl\w+)\b/i;
+  const letterLevel = c => (modeOf(P, c) === 'explicit' ? LETTER_EXPLICIT : LETTER_SAFE);
   const langName = () => (P.textLang === 'fr' ? 'French' : 'English');
   function contextBlock() {
     const lines = [];
@@ -374,7 +385,7 @@ const BD = (() => {
   function chatSystem() {
     if (P.kind === 'social') return [BASE_SOCIAL.replace('{LANG}', langName()), RULES.krea, levelRules(), contextBlock()].join('\n\n');
     if (P.kind === 'set') return [BASE_SET, RULES[P.target], levelRules(), contextBlock()].join('\n\n');
-    return [BASE_SYSTEM, RULES[P.target], levelRules(), lettOn() ? LETTER_CHAT.replace('{LANG}', langName()) + exampleBlock() : NO_LETTER, contextBlock()].join('\n\n');
+    return [BASE_SYSTEM, RULES[P.target], levelRules(), lettOn() && P.mode === 'explicit' ? LETTER_EXPLICIT : '', lettOn() ? LETTER_CHAT.replace('{LANG}', langName()) + exampleBlock() : NO_LETTER, contextBlock()].filter(Boolean).join('\n\n');
   }
 
   // ── Chat ───────────────────────────────────────────────────────────────────
@@ -802,15 +813,54 @@ const BD = (() => {
     } catch (e) { setStatus(e.message || String(e), true); renderBoard(); }
     finally { setBusy(false); }
   }
+  // Rappel de langue en fin de message : sans lui, les consignes anglaises du niveau SFW faisaient répondre en anglais (0 réponse française sur 40 mesurée).
+  const letterLangTail = () => (P.textLang === 'fr'
+    ? '\nWrite every line in French (the voice notes may be in English, but the characters speak French).'
+    : '\nWrite every line in English.');
+  // Case explicitement muette (« personne ne parle », « sans dialogue »…) : pas la peine d'appeler le modèle, qui ne répond « (silence) » que 7 fois sur 10.
+  const isSilentPanel = d => /\b(silent|wordless|no dialogue|no dialog|no one (is )?(speak|talk)|nobody (is )?(speak|talk)|sans dialogue|silencieu\w*|muet\w*|personne ne (parle|dit))/i.test(String(d || ''));
+  // Retire les répliques de personnages absents de la case (les modèles inventent parfois un interlocuteur du projet). Les noms courts sont acceptés.
+  function keepPresent(text, chars) {
+    const names = (chars || []).map(n => String(n).trim().toLowerCase()).filter(Boolean);
+    if (!names.length) return text;
+    const first = n => n.split(/\s+/)[0];
+    const kept = String(text).split('\n').filter(l => {
+      const m = l.match(/^\s*([^:\n]{1,40}?)(?:\s+thinking)?\s*:/i);
+      if (!m) return true;
+      const who = m[1].trim().toLowerCase();
+      if (who === 'box' || who === 'sfx') return true;
+      return names.some(n => n === who || first(n) === first(who));
+    });
+    return kept.some(l => l.trim()) ? kept.join('\n') : text;
+  }
   async function genText(c, unloadAfter = true) {
+    if (isSilentPanel(c.desc)) { c.text = '(silence)'; return; }
     const idx = P.cases.indexOf(c);
-    const voice = n => { const x = P.chars.find(k => k.name.trim().toLowerCase() === n.trim().toLowerCase()); return x && x.voice && x.voice.trim() ? x.voice.trim().slice(0, 400) : '(no voice given: keep it natural)'; };
+    const safe = modeOf(P, c) !== 'explicit';
+    const voice = n => { const x = P.chars.find(k => k.name.trim().toLowerCase() === n.trim().toLowerCase()); return (x && x.voice && x.voice.trim() ? x.voice.trim().slice(0, 400) : '(no voice given: keep it natural)') + (safe ? LETTER_SAFE_VOICE : ''); };
     const voices = c.chars.length ? c.chars.map(n => `- ${n}: ${voice(n)}`).join('\n') : '(no named character)';
     const prev = P.cases.slice(Math.max(0, idx - 3), idx).filter(x => x.text && x.text.trim()).map(x => `p${x.page}c${x.n}: ${x.text.trim().replace(/\n+/g, ' / ')}`).join('\n');
-    const prompt = `${contextBlock()}\n\nPanel (page ${c.page}, case ${c.n}, shot: ${c.shot || 'free'}): ${c.desc}\nCharacters in the panel and their voices:\n${voices}${prev ? '\nPrevious lettering, for continuity:\n' + prev : ''}\n\nWrite the lettering for this panel.`;
-    const r = await llm({ system: LETTER_SYSTEM.replace('{LANG}', langName()).replace('{LEVEL}', levelRules()) + exampleBlock(), prompt, temperature: 0.8, unload: unloadAfter && ls('bd-unload', '1') === '1' });
+    const prompt = `${contextBlock()}\n\nPanel (page ${c.page}, case ${c.n}, shot: ${c.shot || 'free'}): ${c.desc}\nCharacters in the panel and their voices:\n${voices}${prev ? '\nPrevious lettering, for continuity:\n' + prev : ''}\n\nWrite the lettering for this panel.${safe ? LETTER_SAFE_REMIND : ''}${letterLangTail()}`;
+    const unload = unloadAfter && ls('bd-unload', '1') === '1';
+    const system = LETTER_SYSTEM.replace('{LANG}', langName()).replace('{LEVEL}', letterLevel(c)) + exampleBlock() + (safe ? LETTER_SAFE_SELFCHECK : '');
+    // Garde-fou SFW : on détecte (lexique + petit appel de classification) et on refait, 3 essais au plus. Un faux positif ne coûte qu'une régénération.
+    const flagged = async t => {
+      if (LETTER_EXPLICIT_RE.test(t)) return true;
+      const d = await llm({ system: LETTER_DETECT, prompt: 'Text:\n' + t, temperature: 0, unload: false });
+      return !!(d && !d.error && /EXPLICIT/i.test(String(d.text || '').slice(0, 14)));
+    };
+    let r = null;
+    for (let tries = 1; tries <= 3; tries++) {
+      const last = tries === 3;
+      r = await llm({ system, prompt, temperature: tries === 1 ? 0.8 : 0.7, unload: unload && (!safe || last) });
+      if (!r || r.error || !safe || last) break;
+      if (!(await flagged(r.text || ''))) {
+        if (unload) await llm({ system: LETTER_DETECT, prompt: 'Text:\nok', temperature: 0, unload: true });   // décharge le modèle une fois fini
+        break;
+      }
+    }
     if (!r || r.error) throw new Error(r?.error || 'Réponse invalide.');
-    c.text = r.text.trim();
+    c.text = keepPresent(r.text.trim(), c.chars).trim();
   }
   async function genTexts(onlyMissing = true) {
     if (busy) return;
@@ -1566,5 +1616,5 @@ const BD = (() => {
   }
   function onShow() { init(); renderPlan(); scrollChat(); }
 
-  return { init, onShow, _t: { letteringSheet: () => letteringSheet(), postDates, weekView, modeOf, nextWeekday, plan, parseJsonArray, normCase, parseScene, parseReplyPrompts, buildPrompt, buildNegative, sanitize, defaultProject, nextFriday, weekdaysBetween, splitEven, measured, iso, parseISO } };
+  return { init, onShow, _t: { keepPresent, isSilentPanel, letteringSheet: () => letteringSheet(), postDates, weekView, modeOf, nextWeekday, plan, parseJsonArray, normCase, parseScene, parseReplyPrompts, buildPrompt, buildNegative, sanitize, defaultProject, nextFriday, weekdaysBetween, splitEven, measured, iso, parseISO } };
 })();
