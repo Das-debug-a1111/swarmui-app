@@ -18,6 +18,7 @@ const PromptAI = (() => {
   const IMG_THUMB_SIDE = 256;
   const DESCRIBE_DEFAULT = 'Describe this image as a ready-to-use Krea 2 prompt.';
   const EXTRACT_ONLY = 'Look carefully at the attached image. Describe ONLY these elements: {LISTE}. Write each as a ready-to-use prompt fragment for Krea 2, in natural English prose, one line per element, each line starting with its label ("Outfit:", "Background:", "Pose:", "Lighting and mood:"). Be concrete: garments, cuts, fabrics, colors and accessories; place, architecture, objects and depth; body position, limbs, gaze, expression, camera angle and framing; light direction, palette and mood. Never describe the person\'s identity, face, hair, makeup, lips, eyewear or body. No markdown, no commentary.';
+  const EDIT_TEXT = 'Here is my current image prompt, between the markers:\n<<<PROMPT\n{PROMPT}\nPROMPT>>>\n\nThe change I want (the instruction is not part of the prompt):\n{REQUEST}\n\nRewrite the prompt applying ONLY this change. Copy every other word unchanged, in the same order, style and length. Write the prompt in English. Output ONLY the full rewritten prompt, with nothing before or after it.';
   const MERGE_TEXT = 'Here is my current image prompt:\n{PROMPT}\n\nHere are new descriptions for these elements ({LISTE}):\n{FRAGMENTS}\n\nRewrite my current prompt so that ONLY the parts describing {LISTE} are replaced by the new descriptions. Copy every other word of my prompt unchanged, especially everything about the character: hair, face, eyes, makeup, lips, skin, body, age and eyewear, with the same colors, lengths and styles. Do not use anything from the new descriptions that is not about {LISTE}. If my prompt has no part for one of these elements, add its new description where it fits naturally. Do not invent anything else. Keep my prompt\'s order, style and length. Output ONLY the full rewritten prompt, as flowing English prose, with nothing before or after it.';
   const TRANSLATE_SYSTEM = 'You are a literal translator for an image-generation prompt writer. Translate the user\'s text from French into natural, correct English, word for word in meaning. Do not add, remove, soften, exaggerate or comment on anything, including adult or explicit wording: keep every descriptive word, such as "massive" or "plump", at the same intensity. Copy people\'s names, nicknames, brands and character names exactly as written (for example "Eliott" stays "Eliott"). Never add quotation marks or judgments. If the text is already English, fix only spelling and grammar. Keep technical terms (camera, lighting, clothing) accurate. Output ONLY the English text, with no quotes, notes or explanations.';
   const EXTRACT_ITEMS = [
@@ -403,7 +404,7 @@ const PromptAI = (() => {
     }
   }
 
-  async function submit(shown, full, fromInput, fragment = false, mergeInto = null) {
+  async function submit(shown, full, fromInput, fragment = false, mergeInto = null, opts = {}) {
     const btn = $('pai-chat-send');
     if (btn.disabled) return;
     if (llmBusy) { addChatError('Une autre génération est déjà en cours.'); return; }
@@ -421,7 +422,7 @@ const PromptAI = (() => {
     const fail = msg => {
       pending.remove();
       userMsg.remove();
-      if (fromInput && !input.value) input.value = shown;
+      if (fromInput && !input.value) input.value = opts.restore ?? shown;
       if (img && !attached) setAttach(img);
       addChatError(msg);
     };
@@ -467,6 +468,7 @@ const PromptAI = (() => {
       }
       chatHistory.push(entry, { role: 'assistant', content: r.text });
       addMessage('assistant', r.text, false, null, fragment);
+      if (opts.onOk) opts.onOk(r.text);
     } catch (e) {
       fail('Erreur : ' + (e?.message || e));
     } finally {
@@ -480,9 +482,23 @@ const PromptAI = (() => {
     if ($('pai-chat-send').disabled) return;
     let text = $('pai-chat-input').value.trim();
     if (!text && attached) text = DESCRIBE_DEFAULT;
-    if (!text) return;
     $('pai-chat-list').querySelectorAll('.pai-chat-error').forEach(el => el.remove());
+    if (!text) {
+      if ($('pai-chat-prompt').value.trim()) addChatError('Écris dans « Modification demandée » ce que tu veux changer.');
+      return;
+    }
     if (text.length > CHAT_MAX_INPUT) { addChatError(`Message trop long (max ${CHAT_MAX_INPUT} caractères).`); return; }
+    const box = $('pai-chat-prompt').value.trim();
+    if (box) {
+      if (!$('pai-chat-input').value.trim()) { addChatError('Écris dans « Modification demandée » ce que tu veux changer.'); return; }
+      if (box.length > EXTRACT_PROMPT_MAX) { addChatError(`Le prompt à modifier est trop long (max ${EXTRACT_PROMPT_MAX} caractères).`); return; }
+      const full = EDIT_TEXT.replace('{PROMPT}', () => box).replace('{REQUEST}', () => text);
+      submit('✏️ ' + text, full, true, false, null, {
+        restore: text,
+        onOk: reply => { $('pai-chat-prompt').value = reply; save('chat-prompt', reply); },
+      });
+      return;
+    }
     submit(text, text, true);
   }
 
@@ -515,11 +531,9 @@ const PromptAI = (() => {
   function insertCurrent() {
     const current = $('inp-positive').value.trim();
     if (!current) return;
-    const input = $('pai-chat-input');
-    const sep = input.value && !input.value.endsWith('\n') ? '\n' : '';
-    input.value += sep + 'Prompt actuel :\n' + current + '\n\n';
-    input.focus();
-    input.setSelectionRange(input.value.length, input.value.length);
+    $('pai-chat-prompt').value = current;
+    save('chat-prompt', current);
+    $('pai-chat-input').focus();
   }
 
   function init() {
@@ -535,6 +549,7 @@ const PromptAI = (() => {
     $('pai-unload').checked = load('unload', '1') === '1';
     $('pai-idea').value = load('idea', '');
     $('pai-chat-system').value = load('chat-system', DEFAULT_CHAT_SYSTEM);
+    $('pai-chat-prompt').value = load('chat-prompt', '');
     setTab(load('tab', 'idea') === 'chat' ? 'chat' : 'idea');
 
     toggle.addEventListener('click', () => {
@@ -546,7 +561,7 @@ const PromptAI = (() => {
     $('pai-setup-recheck').addEventListener('click', checkSetup);
     $('pai-model').addEventListener('change', () => { if (!$('pai-panel').hidden) checkSetup(); });
 
-    ['url', 'model', 'translate-model', 'temp', 'system', 'examples', 'idea', 'chat-system'].forEach(k =>
+    ['url', 'model', 'translate-model', 'temp', 'system', 'examples', 'idea', 'chat-system', 'chat-prompt'].forEach(k =>
       $('pai-' + k).addEventListener('input', e => save(k, e.target.value)));
     $('pai-tab-idea').addEventListener('click', () => { setTab('idea'); focusActive(); });
     $('pai-tab-chat').addEventListener('click', () => { setTab('chat'); focusActive(); });
@@ -558,6 +573,7 @@ const PromptAI = (() => {
     $('pai-chat-translate').addEventListener('click', () => translateField('pai-chat-input', 'pai-chat-translate'));
     $('pai-translate').addEventListener('click', () => translateField('pai-idea', 'pai-translate'));
     $('pai-chat-insert').addEventListener('click', insertCurrent);
+    $('pai-chat-prompt-clear').addEventListener('click', () => { $('pai-chat-prompt').value = ''; save('chat-prompt', ''); });
     $('pai-chat-new').addEventListener('click', newChat);
     $('pai-chat-input').addEventListener('keydown', e => {
       if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); sendChat(); }

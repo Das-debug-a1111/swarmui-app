@@ -43,9 +43,9 @@ const BD = (() => {
     + "Whenever you write an image prompt, put it on one line starting with \"Prompt:\" (one flowing paragraph, no Negative line). Whenever you write a caption, put it after a line \"Caption:\".";
   const SOCIAL_LEVEL = 'Content level: strictly SFW and Instagram-safe: fully and tastefully dressed, no nudity, no lingerie shots, no sexual content or poses. Glamour, fashion, fitness, travel, cafes, golden-hour and lifestyle photography are all fine.';
   const SOCIAL_SYSTEM = "You plan Instagram posts for an AI-generated adult (18+) lifestyle persona. Output ONLY a JSON array, with no text before or after and no code fence. Each element is one image: {\"page\":1,\"case\":1,\"shot\":\"medium shot\",\"desc\":\"short English visual description: outfit, location, pose, expression, light\"} where page is the post number and case is the image number inside the post. Rules: exactly the number of posts and images per post asked; the images of a carousel show the same moment and outfit with different framings and poses; different locations and outfits from one post to the next; one person only; strictly Instagram-safe (SFW); no text in the image.\n{LEVEL}";
-  const KREA_SCENE_SYSTEM = "You write the SCENE part of one image prompt for the Krea 2 model.\n{RULES}\n{LEVEL}\nThe user message describes the image. Output exactly one line: SCENE: <one flowing paragraph of 2 to 4 sentences in English>. Describe pose, expression, clothing, setting, props, camera framing and angle, light and mood. Do not describe the person's face, hair, skin or body type (a fixed description of the persona is added automatically). One person only. No tags, no quality words, no negative prompt, no text. Output only that line.";
-  const CHAR_SYSTEM_KREA = "You write the fixed appearance paragraph of one adult (18+) persona, to be pasted at the start of every image prompt for consistency.\n{RULES}\nThe user message describes the persona (in any language). Output ONE paragraph of 2 to 3 sentences in English: age range, face, eyes, hair colour and style, skin, body type, distinctive marks. No clothing, no pose, no setting, no name. Output only the paragraph.";
-  const CAPTION_SYSTEM = "You write the Instagram caption for one post of an AI-generated adult (18+) lifestyle persona. Language: {LANG}. Write in the persona's voice (given in the user message when available). Format: 1 to 3 short lines with a hook, at most 3 emojis, a light question or call to action; then a blank line; then 6 to 10 relevant hashtags. Strictly SFW. Never mention the image prompt or the generator. Output only the caption.";
+  const KREA_SCENE_SYSTEM = "You write the SCENE part of one image prompt for the Krea 2 model.\n{RULES}\n{LEVEL}\nThe user message describes the image. Output exactly one line: SCENE: <one flowing paragraph of 2 to 4 sentences in English>. Describe pose, expression, clothing, setting, props, camera framing and angle, light and mood. Do not describe the person's face, hair, skin or body type: a fixed description that introduces her is added automatically before your text, so refer to her only as \"she\" or \"her\" and never write any name. One person only. No tags, no quality words, no negative prompt, no text. Output only that line.";
+  const CHAR_SYSTEM_KREA = "You write the fixed appearance paragraph of one adult (18+) persona, to be pasted at the start of every image prompt for consistency.\n{RULES}\nThe user message describes the persona (in any language). Output ONE paragraph of 2 to 3 sentences in English. Start with the subject, like \"A woman in her late twenties with ...\" (never with \"She\"), then give the face, eyes, hair colour and style, skin, body type and distinctive marks. No clothing, no pose, no setting, no name. Output only the paragraph.";
+  const CAPTION_SYSTEM = "You write the Instagram caption for one post of an AI-generated adult (18+) lifestyle persona. Write the whole caption in {LANG} only, even if the voice description is written in another language. Write in the persona's voice (given in the user message when available). Format: 1 to 3 short lines with a hook, at most 3 emojis, a light question or call to action; then a blank line; then ALWAYS 6 to 10 relevant hashtags on one line (the caption is incomplete without them). No quotation marks around the caption. Strictly SFW. Never mention the image prompt or the generator. Output only the caption.";
   const BASE_SET = "You are the art director and prompt engineer of a small adult (18+) illustration set of about 20 images made with AI image generation: some SFW images shared on Twitter and some NSFW images exclusive to Patreon, all with one coherent theme and the same characters. You help the user (a) find and develop the set's theme and shot list by conversation, (b) write image prompts, (c) explain how to prompt an image they show you. All characters are adults (18+); never write minors or age-ambiguous characters.\n"
     + "Language: talk with the user in French. Every image prompt, tag list and negative prompt is written in English.\n"
     + "Be concrete and short. Offer 2 or 3 options instead of long essays and ask at most two questions at a time. Each image stands alone (no panels, no text, no speech bubbles in the image). Vary poses, angles, framings, locations and outfit states while keeping the same characters and the same look. At most 2 characters per image.\n"
@@ -53,7 +53,7 @@ const BD = (() => {
   const SET_SYSTEM = "You are an art director for adult (18+) illustration sets. Output ONLY a JSON array, with no text before or after and no code fence. Each element describes one image: {\"case\":1,\"chars\":[\"Name\"],\"shot\":\"cowboy shot\",\"desc\":\"short English visual description: pose, expression, outfit state, location, camera angle\"}. Rules: exactly the number of images asked; at most 2 characters per image (use the exact character names given); same theme and same characters across the set; vary poses, angles, framings, locations and outfit states, no near-duplicates; no text of any kind in the image; all characters are adults.\n{LEVEL}";
   const NO_LETTER = 'Lettering is off: never write dialogue, captions, narration or sound-effect text and do not propose any, the user handles it.';
   const LETTER_CHAT = 'Lettering is on: you also help with the text of the comic (dialogue, thoughts, narration, sound effects), which the user hands to a letterer. Write it in {LANG}. Ask how each character speaks when it matters (for example submissive or a total slut and how she moans; a soft and cuddly futanari or a dominant, dirty-talking one) and keep each character\'s voice consistent. Format lettering as one element per line, grouped under "Page N" (or "Page N_1", "Page N_2" when a page has several panels): "Name: spoken line", "Name thinking: thought", "Box: narration", "SFX: onomatopoeia words". Keep bubbles short. The explicitness of the lines follows the content level above.';
-  const LETTER_SYSTEM = "You write the lettering (dialogue, thoughts, narration, sound effects) for ONE comic panel, to be handed to a letterer. Language: {LANG}.\n{LEVEL}\nStay strictly in each character's voice as given in the user message (personality, how they talk, how they moan). Output one element per line, nothing else: \"Name: spoken line\" (use the character's name or short name), \"Name thinking: thought\", \"Box: narration\", and at most one line \"SFX: onomatopoeia words\" (e.g. \"SFX: Rip Stretch Wobble Booiing\", with stretched spellings for long sounds). Sounds and moans inside a line are written like *Moan* or \"Mmmm~\", with a trailing ~ for teasing or pleasure. At most 3 bubbles per panel, each short (about 12 words), natural for a speech bubble, no stage directions, no description of the image. If the panel should stay silent, output exactly: (silence)";
+  const LETTER_SYSTEM = "You write the lettering (dialogue, thoughts, narration, sound effects) for ONE comic panel, to be handed to a letterer. Language: {LANG}.\n{LEVEL}\nStay strictly in each character's voice as given in the user message (personality, how they talk, how they moan). Output one element per line, nothing else: \"Name: spoken line\" (use the character's name or short name), \"Name thinking: thought\", \"Box: narration\", and at most one line \"SFX: onomatopoeia words\" (e.g. \"SFX: Rip Stretch Wobble Booiing\", with stretched spellings for long sounds). Sounds and moans inside a line are written like *Moan* or \"Mmmm~\", with a trailing ~ for teasing or pleasure. At most 3 bubbles per panel, each short (about 12 words), natural for a speech bubble. No quotation marks around the lines, no stage directions. A \"Box:\" line is only for a time or place caption or a narrator comment that adds information the picture does not show; never describe what the image already shows, and skip the Box line when there is nothing to add. If the panel should stay silent, output exactly: (silence)";
   const IMAGE_TASK = "Look carefully at the attached image. {NOTE}1) Write the prompt that would reproduce its composition for the target model, in the exact format of the rules: a line \"Prompt:\" then a line \"Negative:\". Describe appearance generically (never identify a real person). 2) Then a line \"Conseils:\" followed by 3 to 5 short bullet points in French on how to prompt it: which elements matter most, what the model will probably get wrong (hands, overlapping bodies, text), and how to simplify it (shot, number of characters) to make it work as a comic panel. {LEVEL}";
   const SCENE_SYSTEM = "You write the SCENE part of one image prompt for one comic panel.\n{RULES}\n{LEVEL}\nThe user message describes the panel (characters, shot, description). Output exactly two lines:\nCOUNT: <person-count tags, e.g. 1girl / 2girls / 1girl, 1boy / 1boy>\nSCENE: <expression, pose and action, props, setting, framing and camera, lighting>\nDo not describe the characters' hair, eyes, body or usual outfit (their fixed description is added automatically); only mention clothing if it changes in this panel. No quality tags, no rating tags, no negative prompt, no text, no speech bubbles. At most 2 characters. Output only these two lines.";
   const CHAR_SYSTEM = "You write a fixed appearance block for one comic character, to be pasted in every image prompt for consistency.\n{RULES}\nThe user message describes the character (in any language). Output ONE line only: the appearance tags in English (hair colour and style, eye colour, skin, body type, distinctive marks, usual outfit and accessories), 10 to 25 tags, comma separated. No person-count tag, no pose, no setting, no quality tags, no name. The character is an adult. Output only the line.";
@@ -201,8 +201,15 @@ const BD = (() => {
     const n = /^\s*Negative\s*:\s*(.+)$/im.exec(text || '');
     return { prompt: p ? p[1].trim() : '', negative: n ? n[1].trim() : '' };
   }
+  // Assemble des blocs de tags ; un tag déjà présent (ex. « 1girl » dans le comptage ET dans la fiche perso) n'est gardé qu'une fois.
   function joinTags(parts) {
-    return parts.map(s => String(s || '').trim().replace(/^[,\s]+|[,\s]+$/g, '')).filter(Boolean).join(', ');
+    const seen = new Set();
+    const out = [];
+    parts.map(s => String(s || '').trim().replace(/^[,\s]+|[,\s]+$/g, '')).filter(Boolean).forEach(block => {
+      const kept = block.split(/\s*,\s*/).filter(tag => { const k = tag.toLowerCase(); if (!k || seen.has(k)) return false; seen.add(k); return true; });
+      if (kept.length) out.push(kept.join(', '));
+    });
+    return out.join(', ');
   }
   function buildPrompt(p, c, count, scene) {
     const f = p.fmt[p.target];
@@ -478,7 +485,7 @@ const BD = (() => {
   }
   function setBusy(b, label) {
     busy = b;
-    ['bd-send', 'bd-img-task', 'bd-gen-cases', 'bd-gen-prompts', 'bd-gen-text'].forEach(id => { const el = $(id); if (el) el.disabled = b; });
+    ['bd-send', 'bd-img-task', 'bd-gen-cases', 'bd-gen-prompts', 'bd-gen-text', 'bd-gen-captions'].forEach(id => { const el = $(id); if (el) el.disabled = b; });
     $('bd-cancel').hidden = !b || !label;
     if (label) setStatus(label);
   }
@@ -763,7 +770,11 @@ const BD = (() => {
   }
   async function genPrompt(c, unloadAfter = true) {
     const names = c.chars.length ? c.chars.join(' + ') : '(no named character)';
-    const prompt = `Characters: ${names}\nShot: ${c.shot || 'free choice'}\nPanel: ${c.desc}`;
+    let panel = c.desc;
+    if (P.target === 'krea') {   // Krea 2 ne connaît pas le prénom de la persona : on le retire de la description
+      P.chars.map(x => x.name.trim()).filter(Boolean).forEach(n => { panel = panel.replace(new RegExp(n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + "('s)?", 'gi'), (m, poss) => (poss ? "the woman's" : 'the woman')); });
+    }
+    const prompt = P.target === 'krea' ? `Shot: ${c.shot || 'free choice'}\nImage: ${panel}` : `Characters: ${names}\nShot: ${c.shot || 'free choice'}\nPanel: ${panel}`;
     const level = P.kind === 'social' ? SOCIAL_LEVEL : MODE_RULES[modeOf(P, c)];
     const r = await llm({ system: (P.target === 'krea' ? KREA_SCENE_SYSTEM : SCENE_SYSTEM).replace('{RULES}', RULES[P.target]).replace('{LEVEL}', level), prompt, temperature: 0.6, unload: unloadAfter && ls('bd-unload', '1') === '1' });
     if (!r || r.error) throw new Error(r?.error || 'Réponse invalide.');
@@ -982,9 +993,10 @@ const BD = (() => {
 
   async function queueCases(scope) {
     if (busy) return;
-    if (typeof Scheduler === 'undefined' || (P.kind !== 'social' && typeof captureTxt2ImgTask !== 'function')) { setStatus('Le Scheduler n\'est pas disponible.', true); return; }
-    const presetMap = P.kind === 'social' && typeof getPresetsData === 'function' ? getPresetsData()[P.preset] : null;
-    if (P.kind === 'social' && !presetMap) { setStatus('Choisis le preset de génération (ex. Diana) dans « Projet ».', true); return; }
+    const presetMap = P.preset && typeof getPresetsData === 'function' ? getPresetsData()[P.preset] : null;
+    if (typeof Scheduler === 'undefined' || (!presetMap && typeof captureTxt2ImgTask !== 'function')) { setStatus('Le Scheduler n\'est pas disponible.', true); return; }
+    if (P.kind === 'social' && !P.preset) { setStatus('Choisis le preset de génération (ex. Diana) dans « Projet ».', true); return; }
+    if (P.preset && !presetMap) { setStatus(`Le preset « ${P.preset} » n'existe plus dans Txt2Img : choisis-en un autre.`, true); return; }
     const cand = P.cases.filter(c => c.prompt.trim() && !c.queued && !(c.images && c.images.length) && c.state === 'todo');
     if (!cand.length) { setStatus('Rien à mettre en file : il faut des cases à tirer, avec un prompt, pas déjà en file.', true); return; }
     const count = Math.max(1, Math.round(P.T));
@@ -999,15 +1011,15 @@ const BD = (() => {
         for (const c of cand) { if (sum >= need) break; list.push(c); sum += count; }
       }
     }
-    const model = P.kind === 'social' ? (presetMap.model || '(modèle du preset)') : (document.getElementById('sel-model') || {}).value || '(modèle de Txt2Img)';
+    const model = presetMap ? (presetMap.model || '(modèle du preset)') : (document.getElementById('sel-model') || {}).value || '(modèle de Txt2Img)';
     const ok = await confirmBox('Mettre dans la file du Scheduler ?',
-      `<p>${list.length} tâche(s) × ${count} images = <b>${list.length * count} images</b>.</p><p>Réglages de génération : ${P.kind === 'social' ? `ceux du preset <b>${esc(P.preset)}</b>` : "ceux d'<b>Txt2Img</b> en ce moment"} (modèle <code>${esc(model)}</code>, LoRA, taille, steps, sampler). Seul le prompt change.</p><p>Tu lances ensuite la file dans l'onglet Scheduler ; les images reviennent ici, dans chaque case.</p>`, 'Ajouter à la file');
+      `<p>${list.length} tâche(s) × ${count} images = <b>${list.length * count} images</b>.</p><p>Réglages de génération : ${presetMap ? `ceux du preset <b>${esc(P.preset)}</b>` : "ceux d'<b>Txt2Img</b> en ce moment"} (modèle <code>${esc(model)}</code>, LoRA, taille, steps, sampler). Seul le prompt change.</p><p>Tu lances ensuite la file dans l'onglet Scheduler ; les images reviennent ici, dans chaque case.</p>`, 'Ajouter à la file');
     if (!ok) return;
     const pos = document.getElementById('inp-positive');
     const old = pos ? pos.value : '';
     const tmp = !!pos && !old.trim();
     let cap = null;
-    if (P.kind === 'social') {
+    if (presetMap) {
       const base = { ...presetMap };
       delete base.prompt;
       for (const k of ['refinerupscale', 'refinercontrolpercentage', 'refinersteps', 'refinercfgscale']) if (base[k] !== undefined) base[k] = +base[k];
@@ -1018,12 +1030,15 @@ const BD = (() => {
     }
     if (!cap) { setStatus('Impossible de lire les réglages de Txt2Img (connecte-toi à SwarmUI et choisis un modèle).', true); return; }
     const basePrompt = (tmp ? 'x' : old.trim());
-    const suffix = P.kind === 'social' ? '' : (String(cap.payload.prompt || '').startsWith(basePrompt) ? cap.payload.prompt.slice(basePrompt.length) : '');
-    const presetPrefix = P.kind === 'social' && P.usePresetPrompt && String(presetMap.prompt || '').trim() ? String(presetMap.prompt).trim() + ' ' : '';
+    const suffix = presetMap ? '' : (String(cap.payload.prompt || '').startsWith(basePrompt) ? cap.payload.prompt.slice(basePrompt.length) : '');
+    const pp = presetMap && P.usePresetPrompt ? String(presetMap.prompt || '').trim() : '';
+    const presetPrefix = pp ? pp + (/[.,;:!?]$/.test(pp) ? ' ' : ', ') : '';
     setBusy(true, 'Ajout à la file…');
     try {
       for (const c of list) {
-        const neg = P.kind === 'social' ? String(cap.payload.negativeprompt || '') : (c.neg || buildNegative(P, modeOf(P, c)));
+        const neg = presetMap
+          ? (P.kind === 'social' ? String(cap.payload.negativeprompt || '') : joinTags([cap.payload.negativeprompt, modeOf(P, c) === 'safe' ? 'nsfw, explicit' : '']))
+          : (c.neg || buildNegative(P, modeOf(P, c)));
         const payload = structuredClone(cap.payload);
         payload.prompt = presetPrefix + c.prompt.trim() + suffix;
         payload.negativeprompt = neg;
@@ -1319,7 +1334,7 @@ const BD = (() => {
     try { names = Object.keys(typeof getPresetsData === 'function' ? getPresetsData() : {}).sort((a, b) => a.localeCompare(b)); } catch { names = []; }
     sel.textContent = '';
     const none = document.createElement('option');
-    none.value = ''; none.textContent = '— Choisir un preset —';
+    none.value = ''; none.textContent = P.kind === 'social' ? '— Choisir un preset —' : '— Réglages d\'Txt2Img en ce moment —';
     sel.appendChild(none);
     names.forEach(n => { const o = document.createElement('option'); o.value = n; o.textContent = n; sel.appendChild(o); });
     if (P.preset && !names.includes(P.preset)) { const o = document.createElement('option'); o.value = P.preset; o.textContent = P.preset + ' (introuvable)'; sel.appendChild(o); }
@@ -1344,7 +1359,7 @@ const BD = (() => {
     $('bd-gen-cases').textContent = social ? '🧩 Générer les posts' : set ? '🧩 Générer la liste d\'images' : '🧩 Générer le découpage';
     $('bd-wm').hidden = !set;
     $('bd-post-lbl').textContent = social ? 'Première publication' : 'Publication';
-    if (social) fillPresetSelect();
+    fillPresetSelect();
   }
   function renderProjSelect() {
     const sel = $('bd-proj');

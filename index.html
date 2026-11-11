@@ -405,13 +405,19 @@
                 <label class="pai-check"><input id="pai-ex-merge" type="checkbox"> Fusionner dans mon prompt actuel</label>
                 <button id="pai-ex-run" class="btn-secondary" type="button">Extraire</button>
               </div>
-              <textarea id="pai-chat-input" class="prompt pai-idea" rows="3" maxlength="4000" placeholder="Colle un prompt et dis-moi comment l'adapter…"></textarea>
+              <label class="pai-label" for="pai-chat-prompt">Prompt à modifier <span class="pai-hint">(vide = discussion libre)</span></label>
+              <textarea id="pai-chat-prompt" class="prompt pai-idea" rows="3" maxlength="6000" spellcheck="false" placeholder="Le prompt que je dois modifier : colle-le ici ou prends celui de la boîte principale. Après chaque réponse, il est remplacé par la nouvelle version."></textarea>
+              <div class="pai-row">
+                <button id="pai-chat-insert" class="btn-secondary" type="button">↧ Prendre le prompt actuel</button>
+                <button id="pai-chat-prompt-clear" class="btn-secondary" type="button">Vider</button>
+              </div>
+              <label class="pai-label" for="pai-chat-input">Modification demandée</label>
+              <textarea id="pai-chat-input" class="prompt pai-idea" rows="3" maxlength="4000" placeholder="Ex. remplace la robe rouge par une robe noire, ajoute de la pluie… (sans prompt ci-dessus : discute librement)"></textarea>
               <div class="pai-row">
                 <button id="pai-chat-send" class="btn-primary-sm" type="button">Envoyer</button>
                 <button id="pai-chat-translate" class="btn-secondary" type="button" title="Traduit ton message en anglais avant l'envoi">🌐 Anglais</button>
                 <button id="pai-chat-attach-btn" class="btn-secondary" type="button">📎 Image</button>
                 <input id="pai-chat-file" type="file" accept="image/*" hidden>
-                <button id="pai-chat-insert" class="btn-secondary" type="button">Insérer le prompt actuel</button>
                 <button id="pai-chat-new" class="btn-secondary" type="button">Nouvelle conversation</button>
                 <span class="pai-status">Ctrl/Cmd+Entrée pour envoyer</span>
               </div>
@@ -2500,7 +2506,7 @@
           <select id="bd-target" class="inp"><option value="illustrious">Illustrious / WAI</option><option value="anima">Anima</option></select></div>
           <div class="bd-kw bd-k-nosocial"><label id="bd-mode-lbl" class="pai-label" for="bd-mode">Contenu</label>
           <select id="bd-mode" class="inp"><option value="safe">Non explicite</option><option value="explicit">Explicite (adultes)</option></select></div>
-          <div class="bd-kw bd-k-social" hidden><label class="pai-label" for="bd-preset">Preset de génération</label><select id="bd-preset" class="inp"></select></div>
+          <div class="bd-kw"><label class="pai-label" for="bd-preset" title="Réglages complets d'un preset d'Txt2Img : modèle, taille, steps, sampler, LoRA, refiner">Preset de génération</label><select id="bd-preset" class="inp"></select></div>
           <div class="bd-kw bd-k-social" hidden><label class="pai-label" for="bd-socialPosts">Nombre de posts</label><input id="bd-socialPosts" class="inp" type="number" min="1" max="30"></div>
           <div class="bd-kw bd-k-social" hidden><label class="pai-label" for="bd-perPost" title="1 = photo seule, plus = carrousel">Images par post</label><input id="bd-perPost" class="inp" type="number" min="1" max="10"></div>
           <div class="bd-kw bd-k-comic"><label class="pai-label" for="bd-pages">Pages</label><input id="bd-pages" class="inp" type="number" min="1" max="60"></div>
@@ -2510,9 +2516,9 @@
           <label class="pai-label" for="bd-spare">Images de réserve</label>
           <input id="bd-spare" class="inp" type="number" min="0" max="60">
         </div>
+        <div id="bd-preset-info" class="pai-status"></div>
+        <label class="pai-check"><input id="bd-usePresetPrompt" type="checkbox"> Ajouter le prompt du preset au début de chaque prompt (mot-clé du LoRA, style, qualité…)</label>
         <div class="bd-k-social" hidden>
-          <div id="bd-preset-info" class="pai-status"></div>
-          <label class="pai-check"><input id="bd-usePresetPrompt" type="checkbox"> Ajouter le prompt du preset au début de chaque prompt (mot-clé du LoRA de la persona, par exemple)</label>
           <div class="pai-label" style="margin-top:6px">Jours de publication</div>
           <div id="bd-postDays" class="pai-row">
             <label class="pai-check"><input type="checkbox" value="1"> lun</label><label class="pai-check"><input type="checkbox" value="2"> mar</label><label class="pai-check"><input type="checkbox" value="3"> mer</label><label class="pai-check"><input type="checkbox" value="4"> jeu</label><label class="pai-check"><input type="checkbox" value="5"> ven</label><label class="pai-check"><input type="checkbox" value="6"> sam</label><label class="pai-check"><input type="checkbox" value="0"> dim</label>
