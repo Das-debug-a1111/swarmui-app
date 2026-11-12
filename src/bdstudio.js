@@ -39,6 +39,11 @@ const BD = (() => {
     + "Language: talk with the user in French. Every image prompt, tag list and negative prompt is written in English.\n"
     + "Story talk: be concrete and short. Offer 2 or 3 options instead of long essays and ask at most two questions at a time. Comic constraints you must respect: a panel shows at most 2 characters (multi-character panels are costly and unreliable for the image model); every page ends on a hook or a punchline; leave empty space in the frame for speech bubbles; never put text, speech bubbles or sound effects in an image prompt."
     + "Whenever you write an image prompt, put it on one line starting with \"Prompt:\" and, if useful, a second line starting with \"Negative:\". Do not put prompts in quotes or code blocks.";
+  // BD : le modèle local n'était pas fiable pour découper en cases et écrire les prompts (consignes ignorées, personnages et tenues qui changent d'une page à l'autre).
+  // Pour une BD, il ne sert donc plus qu'à brainstormer l'histoire ; les prompts se font à la main ou avec « Idée → prompt » dans Txt2Img.
+  const BASE_BRAINSTORM = "You are the story co-writer of a small adult (18+) comic of about 15 pages. You help the user find, develop and tighten the story idea by conversation: premise, characters and their dynamic, tone, pacing and page rhythm, twists, hooks, endings, variations of the same idea. All characters are adults (18+); never write minors or age-ambiguous characters.\n"
+    + "Language: talk with the user in French. Be concrete and short: offer 2 or 3 options instead of long essays and ask at most two questions at a time. Respect every constraint the user has already given (number of pages, who appears where, what stays off-screen, outfits) and never contradict or silently drop one; if you are unsure, ask.\n"
+    + "Do not write image prompts, tag lists, negative prompts or a panel-by-panel breakdown, and do not write dialogue: the user handles them. If asked, point to the Txt2Img tab (✨ Idée → prompt).";
   const BASE_SOCIAL = "You are the content strategist and prompt engineer for an AI-generated adult (18+) lifestyle persona who posts on Instagram, strictly SFW, 3 times a week. The persona is already set up in the image generator (character LoRA, model and settings are ready): you only write what changes from one post to the next. You help the user (a) find themes and ideas for posts and carousels by conversation, (b) write image prompts for the Krea 2 model, (c) write captions and hashtags, (d) explain how to prompt an image they show you. The persona is an adult (18+).\n"
     + "Language: talk with the user in French. Every image prompt is written in English prose. Captions are written in {LANG}.\n"
     + "Be concrete and short. Offer 2 or 3 options instead of essays and ask at most two questions at a time. Vary locations, outfits, light and framings across posts so the feed does not look repetitive, while the persona's look stays consistent. Never put text, logos or watermarks in an image prompt.\n"
@@ -356,7 +361,8 @@ const BD = (() => {
   const levelRules = () => (P.kind === 'social' ? SOCIAL_LEVEL : P.kind === 'set'
     ? 'Content levels depend on the tier of each image. SFW tier (shared on Twitter): ' + MODE_RULES.safe + ' NSFW tier (exclusive to Patreon): ' + MODE_RULES.explicit
     : MODE_RULES[P.mode]);
-  const lettOn = () => P.kind !== 'set' && P.lettering;
+  const isComic = () => P.kind !== 'set' && P.kind !== 'social';
+  const lettOn = () => !isComic() && P.kind !== 'set' && P.lettering;
   // ── Lettrage des cases SFW : mesuré sur 100 tirages, le prompt seul laissait fuiter du sexuel dans ~40 % des cases quand la voix du personnage est sexuelle
   //    (« salope totale », dominante…). Prompt renforcé (~7 %) + détection et nouvelle tentative (~1 %).
   const LETTER_SAFE = 'Content level: SFW. This panel is shown to a general audience: flirting, teasing, banter, warmth and romantic tension only. Absolutely no sexual vocabulary, no body-arousal talk, no sex acts, no moaning, even if a character\'s personality is sexual: translate that personality into playful, confident, clean lines.';
@@ -385,7 +391,7 @@ const BD = (() => {
   function chatSystem() {
     if (P.kind === 'social') return [BASE_SOCIAL.replace('{LANG}', langName()), RULES.krea, levelRules(), contextBlock()].join('\n\n');
     if (P.kind === 'set') return [BASE_SET, RULES[P.target], levelRules(), contextBlock()].join('\n\n');
-    return [BASE_SYSTEM, RULES[P.target], levelRules(), lettOn() && P.mode === 'explicit' ? LETTER_EXPLICIT : '', lettOn() ? LETTER_CHAT.replace('{LANG}', langName()) + exampleBlock() : NO_LETTER, contextBlock()].filter(Boolean).join('\n\n');
+    return [BASE_BRAINSTORM, contextBlock()].join('\n\n');
   }
 
   // ── Chat ───────────────────────────────────────────────────────────────────
@@ -1412,6 +1418,10 @@ const BD = (() => {
     $('bd-gen-captions').hidden = !social;
     $('bd-gen-cases').textContent = social ? '🧩 Générer les posts' : set ? '🧩 Générer la liste d\'images' : '🧩 Générer le découpage';
     $('bd-wm').hidden = !set;
+    // BD : plus de découpage ni de prompts générés (voir BASE_BRAINSTORM), donc pas d'onglet « Découpage & prompts » ni d'aide au lettrage
+    $('bd-tab-board').hidden = comic;
+    $('bd-lettering').closest('label').hidden = comic;
+    if (comic && !$('bd-pane-board').hidden) setPane('chat');
     $('bd-post-lbl').textContent = social ? 'Première publication' : 'Publication';
     fillPresetSelect();
   }
@@ -1483,6 +1493,7 @@ const BD = (() => {
     $('bd-model-info').textContent = `Modèle : ${ls('promptai-model', DEFAULT_MODEL)} — ${ls('promptai-url', DEFAULT_URL)} (réglable dans Txt2Img → ✨ Idée → prompt → Réglages)`;
   }
   function setPane(name) {
+    if (name === 'board' && isComic()) name = 'chat';
     ['chat', 'board', 'plan'].forEach(p => {
       $('bd-pane-' + p).hidden = p !== name;
       $('bd-tab-' + p).classList.toggle('active', p === name);
