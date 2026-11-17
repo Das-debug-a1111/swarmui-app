@@ -447,7 +447,7 @@ const PromptAI = (() => {
         addMessage('assistant', r2.text, false, null, false);
         return;
       }
-      const opts = {
+      const req = {
         url: $('pai-url').value.trim() || DEFAULT_URL,
         model: $('pai-model').value.trim() || DEFAULT_MODEL,
         system: examples ? system + EXAMPLES_INTRO + examples : system,
@@ -457,8 +457,8 @@ const PromptAI = (() => {
         temperature: readTemp(),
         unload: $('pai-unload').checked,
       };
-      if (img) opts.images = [img.b64];
-      const r = await window.electronAPI.llmGenerate(opts);
+      if (img) req.images = [img.b64];
+      const r = await window.electronAPI.llmGenerate(req);
       if (!r || r.error) { fail(r?.error || 'Réponse invalide.'); return; }
       pending.remove();
       const entry = { role: 'user', content: full };
