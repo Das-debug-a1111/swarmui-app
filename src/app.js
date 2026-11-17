@@ -1615,7 +1615,7 @@ function uiConfirm({ title, html = '', okLabel = 'Confirmer', danger = false }) 
   });
 }
 
-function toast(msg) {
+function toast(msg, ms = 1800) {
   let el = document.getElementById('swarm-toast');
   if (!el) {
     el = document.createElement('div');
@@ -1626,7 +1626,7 @@ function toast(msg) {
   el.textContent = msg;
   el.style.opacity = '1';
   clearTimeout(el._t);
-  el._t = setTimeout(() => { el.style.opacity = '0'; }, 1800);
+  el._t = setTimeout(() => { el.style.opacity = '0'; }, ms);
 }
 
 function finishGeneration() {
@@ -2760,6 +2760,7 @@ window.addEventListener('DOMContentLoaded', () => {
   // Update notifications — auto-download in the background, prompt to
   // restart+install once ready; falls back to a manual download link if the
   // auto-update pipeline errors out (e.g. dev build, network issue).
+  if (window.electronAPI?.onCloseWarning) window.electronAPI.onCloseWarning(() => toast('Appuie encore sur Cmd+W pour fermer vraiment l\'application', 3000));
   if (window.electronAPI?.onUpdateAvailable) {
     const banner      = document.getElementById('update-banner');
     const msg         = document.getElementById('update-msg');

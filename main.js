@@ -334,6 +334,18 @@ function createWindow() {
   win.webContents.on('unresponsive', () => logCrash('renderer unresponsive'));
   win.webContents.on('responsive',   () => logCrash('renderer responsive again'));
 
+  // Cmd+W (ou le bouton rouge) : un premier appui prévient et ne ferme pas ; un second appui dans les 3 s ferme vraiment.
+  // Cmd+Q (quitter) n'est pas gêné.
+  let closeAskedAt = 0;
+  win.on('close', e => {
+    if (quitting) return;
+    const now = Date.now();
+    if (now - closeAskedAt < 3000) return;
+    e.preventDefault();
+    closeAskedAt = now;
+    try { win.webContents.send('window:close-warning'); } catch {}
+  });
+
   win.loadFile('index.html');
   win.once('ready-to-show', () => win.show());
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -501,5 +513,7 @@ app.on('child-process-gone', (_e, details) => {
   try { fsSync.appendFileSync(path.join(app.getPath('userData'), 'crash.log'), `[${new Date().toISOString()}] ${details.type} process gone: reason=${details.reason}\n`); } catch {}
 });
 
+let quitting = false;
+app.on('before-quit', () => { quitting = true; });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
