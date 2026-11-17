@@ -343,7 +343,7 @@ function createWindow() {
     if (now - closeAskedAt < 3000) return;
     e.preventDefault();
     closeAskedAt = now;
-    try { win.webContents.send('window:close-warning'); } catch {}
+    try { win.webContents.send('window:close-warning', 'close'); } catch {}
   });
 
   win.loadFile('index.html');
@@ -485,6 +485,7 @@ autoUpdater.autoDownload = true;
 autoUpdater.autoInstallOnAppQuit = true;
 
 ipcMain.handle('app:installUpdate', () => {
+  quitting = true;   // l'installation de la mise à jour ne passe pas par la confirmation Cmd+Q
   autoUpdater.quitAndInstall();
 });
 
@@ -514,6 +515,17 @@ app.on('child-process-gone', (_e, details) => {
 });
 
 let quitting = false;
-app.on('before-quit', () => { quitting = true; });
+// Cmd+Q : même principe que Cmd+W — un premier appui prévient, un second dans les 3 s quitte vraiment.
+// Sans fenêtre ouverte, ou pour la mise à jour (quitting déjà à true), on quitte tout de suite.
+let quitAskedAt = 0;
+app.on('before-quit', e => {
+  if (quitting) return;
+  const win = BrowserWindow.getAllWindows().find(w => !w.isDestroyed());
+  const now = Date.now();
+  if (!win || now - quitAskedAt < 3000) { quitting = true; return; }
+  e.preventDefault();
+  quitAskedAt = now;
+  try { win.webContents.send('window:close-warning', 'quit'); } catch {}
+});
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });

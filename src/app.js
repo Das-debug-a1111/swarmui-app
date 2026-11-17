@@ -2760,7 +2760,7 @@ window.addEventListener('DOMContentLoaded', () => {
   // Update notifications — auto-download in the background, prompt to
   // restart+install once ready; falls back to a manual download link if the
   // auto-update pipeline errors out (e.g. dev build, network issue).
-  if (window.electronAPI?.onCloseWarning) window.electronAPI.onCloseWarning(() => toast('Appuie encore sur Cmd+W pour fermer vraiment l\'application', 3000));
+  if (window.electronAPI?.onCloseWarning) window.electronAPI.onCloseWarning(kind => toast(kind === 'quit' ? 'Appuie encore sur Cmd+Q pour quitter vraiment l\'application' : 'Appuie encore sur Cmd+W pour fermer vraiment l\'application', 3000));
   if (window.electronAPI?.onUpdateAvailable) {
     const banner      = document.getElementById('update-banner');
     const msg         = document.getElementById('update-msg');
