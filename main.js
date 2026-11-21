@@ -338,7 +338,7 @@ function createWindow() {
   // Cmd+Q (quitter) n'est pas gêné.
   let closeAskedAt = 0;
   win.on('close', e => {
-    if (quitting) return;
+    if (process.platform !== 'darwin' || quitting) return;   // confirmation réservée à macOS (Cmd+W) ; Windows et Linux gardent leur comportement
     const now = Date.now();
     if (now - closeAskedAt < 3000) return;
     e.preventDefault();
@@ -519,7 +519,7 @@ let quitting = false;
 // Sans fenêtre ouverte, ou pour la mise à jour (quitting déjà à true), on quitte tout de suite.
 let quitAskedAt = 0;
 app.on('before-quit', e => {
-  if (quitting) return;
+  if (process.platform !== 'darwin' || quitting) return;
   const win = BrowserWindow.getAllWindows().find(w => !w.isDestroyed());
   const now = Date.now();
   if (!win || now - quitAskedAt < 3000) { quitting = true; return; }
