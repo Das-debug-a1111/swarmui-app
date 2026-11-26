@@ -535,6 +535,8 @@ const Scheduler = (() => {
         if (task.inpaint.maskMode === 'not_masked') payload.maskgrowamount = -1;
       }
     }
+    // Reprise d'une tâche à seed fixe : repartir après les images déjà faites, sinon elles seraient refaites à l'identique
+    if (task.doneImages && +payload.seed >= 0) payload.seed = +payload.seed + task.doneImages;
     payload.images     = count;
     payload.session_id = API.session;
     return payload;
@@ -547,7 +549,7 @@ const Scheduler = (() => {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(`${API.wsOrigin}/API/GenerateText2ImageWS`);
       S.currentWS = ws;
-      let gotDone = false, gotImage = false, settled = false;
+      let gotDone = false, gotImage = false, settled = false, cut = false, received = 0;
       const fail = err => { if (!settled) { settled = true; reject(err); } };
       const ok   = () => { if (!settled) { settled = true; resolve(); } };
 
@@ -573,7 +575,11 @@ const Scheduler = (() => {
           const src = rawPath.startsWith('http') || rawPath.startsWith('data:')
             ? rawPath
             : `${API.origin}/${rawPath.replace(/^\//, '')}`;
-          if (src) { gotImage = true; onImage(src); }
+          if (src) {
+            gotImage = true; received++; onImage(src);
+            // Pause demandée : l'image en cours vient d'arriver, on interrompt le reste du lot côté SwarmUI
+            if (S.paused && received < count) { cut = true; API.interrupt().catch(() => {}); ws.close(); }
+          }
         }
         if (msg.done) { gotDone = true; ws.close(); }
       };
@@ -581,6 +587,7 @@ const Scheduler = (() => {
       ws.onclose = () => {
         S.currentWS = null;
         if (S.stopReq) fail(new Error('stopped'));
+        else if (cut) { if (!settled) { settled = true; resolve('paused'); } }
         else if (gotDone) ok();
         else fail(new Error(gotImage ? 'Connexion coupée en cours de génération' : 'Connexion coupée par le serveur avant la fin'));
       };
@@ -664,7 +671,7 @@ const Scheduler = (() => {
           const count = remainingOf(task);
           if (count <= 0) break;
           setTaskProgress(0, attempt ? `Nouvel essai (${attempt}/2)…` : 'Démarrage…');
-          await generateWS(task, count, src => {
+          const outcome = await generateWS(task, count, src => {
             task.doneImages = (task.doneImages || 0) + 1;
             task.thumb = src;
             S.run.doneImgs++;
@@ -674,6 +681,11 @@ const Scheduler = (() => {
             renderTaskProgress(task);
             save();
           });
+          if (outcome === 'paused') {
+            setTaskProgress(undefined, 'En pause');
+            while (S.paused && !S.stopReq) await sleep(400);
+            continue;   // reprise : seules les images manquantes sont demandées
+          }
           break;
         } catch (e) {
           if (S.stopReq) break;
@@ -731,6 +743,8 @@ const Scheduler = (() => {
   function stopQueue() {
     S.stopReq = true; S.paused = false;
     if (S.currentWS) { S.currentWS.close(); S.currentWS = null; }
+    // Fermer la connexion ne suffit pas : sans interruption, SwarmUI continue de générer le lot
+    if (S.running) API.interrupt().catch(() => toast('SwarmUI n\'a pas reçu l\'arrêt', 'error'));
     updateButtons();
   }
 
