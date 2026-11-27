@@ -55,9 +55,14 @@ const InpaintScheduler = (() => {
       if (!r.ok) throw new Error(`Forge /sd-models: ${r.status}`);
       return r.json();
     });
-    const sel = q('ips-sel-model');
-    if (!sel || !d?.length) return;
-    sel.innerHTML = d.map(m => `<option value="${esc(m.title)}">${esc(m.title)}</option>`).join('');
+    if (!d?.length) return;
+    _forgeModels = d;
+    renderForgeModels();
+  }
+
+  let _forgeModels = [];
+  function renderForgeModels(keep = q('ips-sel-model')?.value) {
+    ForgeSort.fillModels(q('ips-sel-model'), q('ips-family-chips'), _forgeModels, 'forge-ips-family', keep);
   }
 
   async function loadForgeSamplers() {
@@ -201,7 +206,10 @@ const InpaintScheduler = (() => {
       el.value = v;
       if (valId && q(valId)) q(valId).textContent = (+v).toFixed(dec);
     };
-    if (p.model     !== undefined && q('ips-sel-model')) q('ips-sel-model').value = p.model;
+    if (p.model     !== undefined && q('ips-sel-model')) {
+      if (_forgeModels.some(m => m.title === p.model)) renderForgeModels(p.model);
+      q('ips-sel-model').value = p.model;
+    }
     if (p.sampler   !== undefined && q('ips-sampler'))   q('ips-sampler').value   = p.sampler;
     if (p.scheduler !== undefined && q('ips-scheduler')) q('ips-scheduler').value = p.scheduler;
     setSl('ips-steps',   'ips-steps-val',   p.steps,   0);

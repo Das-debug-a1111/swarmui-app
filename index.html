@@ -792,6 +792,7 @@
             <span>Modèle</span>
             <span id="inp-forge-indicator" class="inp-pill">● Offline</span>
           </div>
+          <div class="family-chips" id="inp-family-chips" style="display:none"></div>
           <select class="inp-sel" id="inp-sel-model">
             <option value="">— Connect first —</option>
           </select>
@@ -820,6 +821,8 @@
         <details data-key="loras" class="inp-card inp-fold">
           <summary class="inp-card-hdr"><span>LoRAs <span id="inp-lora-count" class="inp-count"></span></span><span class="inp-chev">›</span></summary>
           <div id="inp-lora-toggle" class="inp-hidden-toggle"><span id="inp-lora-arrow"></span></div>
+          <label class="check-row"><input type="checkbox" id="inp-chk-all-loras"> Montrer tous les LoRA, pas seulement ceux du modèle</label>
+          <div class="field-hint" id="inp-lora-filter-hint"></div>
           <div id="inp-lora-list"></div>
           <button class="inp-btn-ghost" id="inp-lora-add" title="Add LoRA">+ Ajouter un LoRA</button>
         </details>
@@ -1454,6 +1457,7 @@
             <span>Modèle et échantillonnage</span><span class="arrow">›</span>
           </div>
           <div class="sidebar-section-body" id="sec-ips-model">
+            <div class="family-chips" id="ips-family-chips" style="display:none"></div>
             <select class="inp inp-lg" id="ips-sel-model"><option value="">— Connect first —</option></select>
             <div class="field-pair">
               <div class="field"><div class="field-label">Sampler</div><select class="inp" id="ips-sampler"></select></div>
@@ -2808,6 +2812,7 @@
 <script src="src/charselector.js"></script>
 <script src="src/instances.js"></script>
 <script src="src/models.js"></script>
+<script src="src/forgesort.js"></script>
 <script src="src/inpaint.js"></script>
 <script src="src/scheduler.js"></script>
 <script src="src/watermark.js"></script>

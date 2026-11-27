@@ -278,27 +278,50 @@ const Inpaint = (() => {
   }
 
   // ── Forge LoRAs ────────────────────────────────────────────────────────────
-  let _forgeLoras = []; // [{name, alias}]
+  let _forgeLoras = []; // [{name, alias, path}]
+  let _forgeModels = [];
 
   async function loadForgeLoras() {
     try {
       const d = await fetch(`${getForgeUrl()}/sdapi/v1/loras`).then(r => r.json());
       _forgeLoras = Array.isArray(d) ? d : [];
-      // Refresh any open LoRA selects
-      q('inp-lora-list')?.querySelectorAll('.inp-lora-sel').forEach(sel => {
-        const cur = sel.value;
-        sel.innerHTML = loraOptions();
-        if (cur) sel.value = cur;
-      });
     } catch { _forgeLoras = []; }
+    refreshLoraSelects();
   }
 
-  function loraOptions() {
+  // Mêmes règles que Txt2Img : LoRA de la famille du modèle choisi, plus ceux déjà utilisés
+  function loraList(extra) {
+    const used = [...(q('inp-lora-list')?.querySelectorAll('.inp-lora-sel') || [])].map(s => s.value);
+    return ForgeSort.loraChoices(_forgeLoras, q('inp-sel-model')?.value || '', !!q('inp-chk-all-loras')?.checked, new Set([...used, extra].filter(Boolean)));
+  }
+
+  function loraOptions(extra) {
     return '<option value="">— Select LoRA —</option>' +
-      _forgeLoras.map(l => {
+      loraList(extra).list.map(l => {
         const label = l.alias && l.alias !== l.name ? `${l.name} — ${l.alias}` : l.name;
         return `<option value="${esc(l.name)}">${esc(label)}</option>`;
       }).join('');
+  }
+
+  function refreshLoraSelects() {
+    const hint = q('inp-lora-filter-hint');
+    if (hint) hint.textContent = loraList().hint;
+    if (!_forgeLoras.length) return;
+    q('inp-lora-list')?.querySelectorAll('.inp-lora-sel').forEach(sel => {
+      const cur = sel.value;
+      sel.innerHTML = loraOptions(cur);
+      sel.value = cur;
+    });
+  }
+
+  function renderForgeModels(keep = q('inp-sel-model')?.value) {
+    ForgeSort.fillModels(q('inp-sel-model'), q('inp-family-chips'), _forgeModels, 'forge-inp-family', keep);
+  }
+
+  // Rappelé quand SwarmUI a (re)chargé ses listes : l'ordre et les familles viennent de lui
+  function refreshChoices() {
+    renderForgeModels();
+    refreshLoraSelects();
   }
 
   function addInpLora(name = '', weight = 0.8) {
@@ -306,7 +329,7 @@ const Inpaint = (() => {
     const row  = document.createElement('div');
     row.className = 'inp-lora-row';
     row.innerHTML = `
-      <select class="inp-sel inp-lora-sel" style="flex:1;min-width:0;font-size:11px">${loraOptions()}</select>
+      <select class="inp-sel inp-lora-sel" style="flex:1;min-width:0;font-size:11px">${loraOptions(name)}</select>
       <input type="number" class="inp-field inp-lora-weight" value="${weight}"
              min="0" max="2" step="0.05" style="width:52px;text-align:center;font-size:11px" title="Weight">
       <button class="inp-btn-sm inp-btn-danger inp-lora-del" style="padding:2px 6px" title="Remove">✕</button>`;
@@ -347,13 +370,10 @@ const Inpaint = (() => {
       if (!r.ok) throw new Error(`Forge /sd-models: ${r.status}`);
       return r.json();
     });
-    const sel = q('inp-sel-model');
-    if (!sel || !d?.length) return;
-    const saved = localStorage.getItem('forge-inp-model');
-    sel.innerHTML = d.map(m =>
-      `<option value="${esc(m.title)}"${m.title === saved ? ' selected' : ''}>${esc(m.title)}</option>`
-    ).join('');
-    if (saved && [...sel.options].some(o => o.value === saved)) sel.value = saved;
+    if (!d?.length) return;
+    _forgeModels = d;
+    renderForgeModels(localStorage.getItem('forge-inp-model') || q('inp-sel-model')?.value);
+    refreshLoraSelects();
   }
 
   async function loadForgeSamplers() {
@@ -610,7 +630,8 @@ const Inpaint = (() => {
     // Sync prompts from main tab
 
     // Save model/sampler selection (Forge-specific keys)
-    q('inp-sel-model').onchange = () => localStorage.setItem('forge-inp-model',     q('inp-sel-model').value);
+    q('inp-sel-model').onchange = () => { localStorage.setItem('forge-inp-model', q('inp-sel-model').value); refreshLoraSelects(); };
+    q('inp-chk-all-loras').onchange = refreshLoraSelects;
     q('inp-sampler').onchange   = () => localStorage.setItem('forge-inp-sampler',   q('inp-sampler').value);
     q('inp-scheduler').onchange = () => localStorage.setItem('forge-inp-scheduler', q('inp-scheduler').value);
 
@@ -1138,7 +1159,10 @@ const Inpaint = (() => {
       el.value = v;
       if (valId && q(valId)) q(valId).textContent = (+v).toFixed(dec);
     };
-    if (p.model  !== undefined && q('inp-sel-model')) q('inp-sel-model').value = p.model;
+    if (p.model  !== undefined && q('inp-sel-model')) {
+      if (_forgeModels.some(m => m.title === p.model)) renderForgeModels(p.model);   // même s'il est masqué par la famille
+      q('inp-sel-model').value = p.model;
+    }
     if (p.count) S.setCount?.(p.count);
     if (p.prompt !== undefined) q('inp-prompt').value = p.prompt;
     if (p.neg    !== undefined) q('inp-neg').value    = p.neg;
@@ -1171,6 +1195,7 @@ const Inpaint = (() => {
       (p.loras || []).forEach(l => addInpLora(l.name, l.weight));
       updateInpLoraCount();
     }
+    refreshLoraSelects();
   }
 
   function renderPresetList() {
@@ -1497,6 +1522,6 @@ const Inpaint = (() => {
   }
 
   // ── Public API ─────────────────────────────────────────────────────────────
-  return { init, onShow, loadFromSrc };
+  return { init, onShow, loadFromSrc, refreshChoices };
 
 })();

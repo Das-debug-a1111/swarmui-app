@@ -1211,6 +1211,7 @@ function updateLoraFilterHint() {
 }
 
 function refreshLoraChoices() {
+  if (typeof Inpaint !== 'undefined') Inpaint.refreshChoices?.();
   updateLoraFilterHint();
   document.querySelectorAll('.lora-sel').forEach(populateLoRASelect);
 }
