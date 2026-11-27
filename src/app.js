@@ -2197,12 +2197,36 @@ function loadPresets() {
     .forEach(id => $(id).disabled = false);
 }
 
+// Modèles de départ Anima : réglages de génération seulement (ni prompt, ni modèle, ni taille), non modifiables.
+// Valeurs : fiche officielle d'Anima et doc SwarmUI ; le CFG d'Aesthetic et le sampler de Turbo viennent de guides, à ajuster à l'usage.
+const BUILTIN_PRESETS = {
+  'builtin:anima-aesthetic': { title: 'Anima Aesthetic', profile: 'anima-aesthetic', param_map: { steps: 30, cfgscale: 4, sampler: 'er_sde', scheduler: 'simple' } },
+  'builtin:anima-base':      { title: 'Anima Base',      profile: 'anima-base',      param_map: { steps: 40, cfgscale: 4.5, sampler: 'er_sde', scheduler: 'simple' } },
+  'builtin:anima-turbo':     { title: 'Anima Turbo',     profile: 'anima-turbo',     param_map: { steps: 10, cfgscale: 1, sampler: 'euler', scheduler: 'simple' } },
+};
+
 function renderPresetList() {
   const sel = $('sel-preset');
   const cur = sel.value;
   sel.innerHTML = '<option value="">— Select preset —</option>' +
-    App.presets.map(p => `<option value="${esc(p.title)}">${esc(p.title)}</option>`).join('');
+    App.presets.map(p => `<option value="${esc(p.title)}">${esc(p.title)}</option>`).join('') +
+    '<optgroup label="Modèles de départ (non modifiables)">' +
+    Object.entries(BUILTIN_PRESETS).map(([id, p]) => `<option value="${id}">${esc(p.title)}</option>`).join('') + '</optgroup>';
   if (cur) sel.value = cur;
+}
+
+// Applique un modèle de départ : seulement ce que la liste du serveur propose (sampler, scheduler), et dit ce qui n'a pas pu l'être
+function applyBuiltinPreset(id) {
+  const b = BUILTIN_PRESETS[id]; if (!b) return;
+  const m = b.param_map, missing = [];
+  applyPreset({ param_map: { steps: m.steps, cfgscale: m.cfgscale } });
+  [['sel-sampler', m.sampler, 'sampler'], ['sel-scheduler', m.scheduler, 'scheduler']].forEach(([sid, val, label]) => {
+    const el = $(sid); if (!el) return;
+    if ([...el.options].some(o => o.value === val)) el.value = val; else missing.push(`${label} « ${val} »`);
+  });
+  if (typeof PromptBuilder !== 'undefined' && PromptBuilder.setProfile) PromptBuilder.setProfile(b.profile);
+  if (missing.length) showErrorToast(`${b.title} : ${missing.join(' et ')} introuvable${missing.length > 1 ? 's' : ''} dans la liste (connecte-toi à SwarmUI, ou choisis-le à la main).`);
+  else toast(`${b.title} : steps ${m.steps}, CFG ${m.cfgscale}, ${m.sampler}, ${m.scheduler}.`);
 }
 
 function applyPreset(preset) {
@@ -2309,15 +2333,16 @@ function collectParamMap() {
 $('btn-preset-load').addEventListener('click', () => {
   const title = $('sel-preset').value;
   if (!title) return;
+  if (title.startsWith('builtin:')) { applyBuiltinPreset(title); return; }
   const preset = App.presets.find(p => p.title === title);
   if (preset) applyPreset(preset);
 });
 
 $('sel-preset').addEventListener('change', () => {
-  const hasVal = !!$('sel-preset').value;
+  const v = $('sel-preset').value, builtin = v.startsWith('builtin:'), hasVal = !!v;
   $('btn-preset-load').disabled   = !hasVal;
-  $('btn-preset-delete').disabled = !hasVal;
-  $('inp-preset-name').value      = $('sel-preset').value;
+  $('btn-preset-delete').disabled = !hasVal || builtin;
+  $('inp-preset-name').value      = builtin ? BUILTIN_PRESETS[v].title + ' (copie)' : v;
 });
 
 // Différences entre un preset enregistré et les réglages actuels, pour la confirmation d'écrasement
@@ -2343,6 +2368,7 @@ async function doSavePreset() {
   // Use typed name first, fall back to selected preset
   const title = $('inp-preset-name').value.trim() || $('sel-preset').value;
   if (!title) return;
+  if (title.startsWith('builtin:')) { showErrorToast('Les modèles de départ ne se modifient pas : donne un nom à ton preset.'); return; }
   const presets = getPresetsData();
   const next = collectParamMap();
   if (presets[title]) {

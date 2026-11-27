@@ -57,7 +57,7 @@ const TagComplete = (() => {
       _indexSize = DB.length;
     }
     const t = _index.get(String(name).toLowerCase().replace(/ /g, '_'));
-    return t ? { name: t.name, count: t.count } : null;
+    return t ? { name: t.name, count: t.count, type: t.type } : null;
   }
 
   function recentScore(name) {
@@ -65,20 +65,57 @@ const TagComplete = (() => {
     return i === -1 ? 0 : (30 - i);
   }
 
-  function query(q) {
+  // ── Filtre par catégorie ──────────────────────────────────────────────────
+  // filter = { types?: [types Danbooru], cats?: [catégories du constructeur] }. Les catégories viennent de PromptCore (listes + motifs).
+  let globalFilter = null;
+  const FILTERS = [
+    ['', 'Tous les tags'], ['character', 'Personnages'], ['copyright', 'Séries'], ['artist', 'Artistes'], ['meta', 'Méta'],
+    ['quality', 'Qualité'], ['clothing', 'Vêtements'], ['hair', 'Cheveux'], ['eyes', 'Yeux et maquillage'], ['body', 'Corps'],
+    ['expression', 'Expression'], ['pose', 'Pose'], ['framing', 'Angle et cadrage'], ['lighting', 'Lumière'], ['setting', 'Contexte et décor'], ['style', 'Style'],
+  ];
+  const TYPE_OF_FILTER = { character: [4], copyright: [3], artist: [1], meta: [5] };
+  function filterFromKey(key) {
+    if (!key) return null;
+    return TYPE_OF_FILTER[key] ? { types: TYPE_OF_FILTER[key] } : { cats: [key] };
+  }
+  function setGlobalFilter(keyOrFilter) { globalFilter = typeof keyOrFilter === 'string' ? filterFromKey(keyOrFilter) : (keyOrFilter || null); }
+  const filterFor = el => (el && el._tcFilter) || (el && (el.id === 'inp-positive' || el.id === 'inp-negative') ? globalFilter : null);
+  function passes(t, f) {
+    if (!f) return true;
+    if (f.types && !f.types.includes(t.type)) return false;
+    if (f.cats) {
+      if (t.type !== 0 && t.type !== 6) return false;
+      const c = typeof PromptCore !== 'undefined' ? PromptCore.categoryOf(t.name) : null;
+      if (!c || !f.cats.includes(c)) return false;
+    }
+    return true;
+  }
+
+  function query(q, f) {
     if (!q || q.length < CFG.minChars) return [];
     const nq = q.toLowerCase().replace(/ /g, '_');
     const exact = [], starts = [], has = [];
     for (const t of DB) {
       const tl = t.lower.replace(/ /g, '_');
-      if (tl === nq)          { exact.push(t);  continue; }
-      if (tl.startsWith(nq)) { starts.push(t); continue; }
-      if (t.aliases.some(a => { const al = a.toLowerCase().replace(/ /g,'_'); return al===nq||al.startsWith(nq); })) { starts.push(t); continue; }
-      if (tl.includes(nq))   { has.push(t);    continue; }
+      let grp = null;
+      if (tl === nq) grp = exact;
+      else if (tl.startsWith(nq)) grp = starts;
+      else if (t.aliases.some(a => { const al = a.toLowerCase().replace(/ /g,'_'); return al===nq||al.startsWith(nq); })) grp = starts;
+      else if (tl.includes(nq)) grp = has;
+      if (grp && passes(t, f)) grp.push(t);
     }
     // Within each group, sort by recency bonus then count
     const sort = arr => arr.sort((a,b) => (recentScore(b.name)-recentScore(a.name)) || (b.count-a.count));
-    return [...sort(exact), ...sort(starts), ...sort(has)].slice(0, CFG.maxResults);
+    let out = [...sort(exact), ...sort(starts), ...sort(has)].slice(0, CFG.maxResults);
+    // Filtre par catégorie : complète avec le vocabulaire du constructeur (utile si la base de tags est vide ou ne connaît pas le tag)
+    if (f && f.cats && typeof PromptCore !== 'undefined' && out.length < CFG.maxResults) {
+      const have = new Set(out.map(t => t.lower.replace(/ /g, '_')));
+      f.cats.forEach(c => PromptCore.suggest(c, q.replace(/_/g, ' '), CFG.maxResults).forEach(name => {
+        const key = name.toLowerCase().replace(/ /g, '_');
+        if (!have.has(key) && out.length < CFG.maxResults) { have.add(key); out.push({ name, type: 0, count: 0, aliases: [], lower: name.toLowerCase() }); }
+      }));
+    }
+    return out;
   }
 
   // ── CSV parser (a1111-tagcomplete format) ──────────────────────────────────
@@ -387,7 +424,7 @@ const TagComplete = (() => {
       const { tag, start, end } = getCurrentTag(el);
       currentEl = el; tagStart = start; tagEnd = end;
       if (tag.length >= CFG.minChars) {
-        renderDropdown(query(tag), el);
+        renderDropdown(query(tag, filterFor(el)), el);
       } else {
         hideDD();
       }
@@ -421,6 +458,12 @@ const TagComplete = (() => {
   }
 
   // ── Attach ─────────────────────────────────────────────────────────────────
+  // Branche l'auto-complétion sur un champ en la limitant à une catégorie de tags (ex. { cats: ['framing'] } ou { types: [4] }).
+  function attachFiltered(el, filter) {
+    el._tcFilter = filter || null;
+    attach(el);
+  }
+
   function attach(el) {
     if (el.dataset.tc) return;
     el.dataset.tc = '1';
@@ -528,5 +571,5 @@ const TagComplete = (() => {
     return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
-  return { init, attach, tagInfo, hasDB: () => DB.length > 0, mergeExtra, parseCSV, clearModelCache: () => { delete _modelCache.lora; delete _modelCache.embed; delete _modelCache.preset; } };
+  return { init, attach, attachFiltered, setGlobalFilter, FILTERS, tagInfo, hasDB: () => DB.length > 0, mergeExtra, parseCSV, clearModelCache: () => { delete _modelCache.lora; delete _modelCache.embed; delete _modelCache.preset; } };
 })();

@@ -415,7 +415,10 @@
             Prompt
             <button id="pai-toggle-btn" class="cs-toggle-btn pai-toggle-btn" title="Transformer une courte idée en prompt avec un LLM local (Ollama)">✨ Idée → prompt</button>
             <button id="cs-toggle-btn" class="cs-toggle-btn" title="Character Selector">Characters</button>
+            <button id="pb-toggle-btn" class="cs-toggle-btn" title="Construire le prompt par catégories : qualité, trigger words, personnages, angle, décor…">🧱 Constructeur</button>
+            <select id="tc-filter-sel" class="inp tc-filter" title="Limite l'auto-complétion des boîtes de prompt à une catégorie de tags"></select>
           </div>
+          <div id="pb-panel" class="pb-panel" hidden></div>
           <div id="pai-panel" class="pai-panel" hidden>
             <div class="pai-tabs">
               <button id="pai-tab-idea" class="pai-tab active" type="button" data-tab="idea">Idée</button>
@@ -2808,6 +2811,7 @@
 <script src="src/neobackend.js"></script>
 <script src="src/neoui.js"></script>
 <script src="src/neoext.js"></script>
+<script src="src/promptcore.js"></script>
 <script src="src/tagcomplete.js"></script>
 <script src="src/charselector.js"></script>
 <script src="src/instances.js"></script>
@@ -2823,6 +2827,7 @@
 <script src="src/sidebarOrder.js"></script>
 <script src="src/pasteTargets.js"></script>
 <script src="src/promptai.js"></script>
+<script src="src/promptbuilder.js"></script>
 <script src="src/bdstudio.js"></script>
 <script src="src/app.js"></script>
 <script src="src/xyzgrid.js"></script>
