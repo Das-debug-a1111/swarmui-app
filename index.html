@@ -2804,6 +2804,9 @@
     <div class="neo-cat-list" id="neo-cat-list"></div>
   </div>
 </div>
+<!-- Extensions locales facultatives (dossier private/, hors du dépôt) : sans lui, ce fichier manque et rien ne change. -->
+<script src="src/ext.js"></script>
+<script src="private/renderer.js"></script>
 <script src="src/jszip.min.js"></script>
 <script src="src/jspdf.umd.min.js"></script>
 <script src="src/api.js"></script>
@@ -2811,7 +2814,7 @@
 <script src="src/neobackend.js"></script>
 <script src="src/neoui.js"></script>
 <script src="src/neoext.js"></script>
-<script src="src/promptcore.js"></script>
+<script>Ext.tag('src/promptcore.js')</script>
 <script src="src/tagcomplete.js"></script>
 <script src="src/charselector.js"></script>
 <script src="src/instances.js"></script>
@@ -2826,9 +2829,10 @@
 <script src="src/twitter.js"></script>
 <script src="src/sidebarOrder.js"></script>
 <script src="src/pasteTargets.js"></script>
-<script src="src/promptai.js"></script>
-<script src="src/promptbuilder.js"></script>
-<script src="src/bdstudio.js"></script>
+<script>Ext.tag('src/promptai.js')</script>
+<script>Ext.tag('src/promptbuilder.js')</script>
+<script>Ext.tag('src/bdstudio.js')</script>
+<script>Ext.scripts()</script>
 <script src="src/app.js"></script>
 <script src="src/xyzgrid.js"></script>
 </body>

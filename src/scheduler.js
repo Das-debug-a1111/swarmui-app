@@ -597,6 +597,31 @@ const Scheduler = (() => {
     });
   }
 
+  // Une image tout de suite, hors file (essai d'une image) : même construction de requête, sans toucher à l'état de la file.
+  async function generateOnce({ payload, state }, onImage) {
+    await init();
+    if (!API.session) { try { await API.getSession(); } catch (e) { throw new Error(`Pas connecté à ${API.engineName} : ` + e.message); } }
+    await API.beforeGeneration();
+    const body = buildTaskPayload({ type: 'snapshot', payload, state }, 1);
+    return new Promise((resolve, reject) => {
+      const ws = API.openGenerationSocket();
+      let got = 0, settled = false;
+      const end = err => { if (settled) return; settled = true; ws.close(); if (err) reject(err); else resolve(got); };
+      ws.onopen = () => ws.send(JSON.stringify(body));
+      ws.onmessage = evt => {
+        let msg; try { msg = JSON.parse(evt.data); } catch { return; }
+        if (msg.error) return end(new Error(msg.error));
+        if (msg.image) {
+          const raw = typeof msg.image === 'object' ? (msg.image.image || msg.image.url || '') : msg.image;
+          if (raw) { got++; onImage(API.imageUrl(raw)); }
+        }
+        if (msg.done) end(got ? null : new Error(`${API.engineName} n'a renvoyé aucune image`));
+      };
+      ws.onclose = () => end(got ? null : new Error('Connexion coupée avant l\'image'));
+      ws.onerror = () => end(new Error('Erreur WebSocket'));
+    });
+  }
+
   // ── Lancement de la file ────────────────────────────────────────────────────
   const RETRYABLE = /websocket|connexion coupée|failed to fetch|network|timeout|closed/i;
   const remainingOf = t => Math.max(0, (+t.count || 1) - (t.doneImages || 0));
@@ -1039,6 +1064,17 @@ const Scheduler = (() => {
     S.tasks.push(task);
     save(); render();
     return task;
+  }
+
+  // Retire les tâches de la file rattachées à une case de Production (celle en cours de génération reste).
+  async function removeBdTasks({ pid, uid }) {
+    await init();
+    const kept = S.tasks.filter(t => !(t.bdRef && t.bdRef.pid === pid && t.bdRef.uid === uid) || (S.running && t.status === 'running'));
+    if (kept.length === S.tasks.length) return 0;
+    const n = S.tasks.length - kept.length;
+    S.tasks = kept;
+    save(); render();
+    return n;
   }
 
   async function updateSnapshotTask(id, { payload, state }) {
@@ -2135,7 +2171,9 @@ const Scheduler = (() => {
       if (document.querySelector('.tab[data-tab="scheduler"].active')) connect();
     },
     addSnapshotTask,
+    removeBdTasks,
     updateSnapshotTask,
+    generateOnce,
     // Appelés depuis le HTML généré (listes des modales)
     _applyPreset:      idx => applyPreset(idx),
     _loadTaskPreset:   id  => loadTaskPreset(id),

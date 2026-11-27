@@ -13,6 +13,7 @@ const Inpaint = (() => {
   const S = {
     image:            null,
     imageData:        null,
+    bdRef:            null,   // case de Production d'où vient l'image : les résultats y retournent
     maskCanvas:       null,
     maskCtx:          null,
     drawing:          false,
@@ -143,6 +144,7 @@ const Inpaint = (() => {
       imageData: imgC.toDataURL('image/jpeg', 0.92), // JPEG to save memory
       maskData:  mskC.toDataURL('image/png'),
       sketchData,
+      bdRef: S.bdRef,
     };
   }
 
@@ -202,12 +204,15 @@ const Inpaint = (() => {
       imageData:  canvas.imageData,
       maskData:   canvas.maskData,
       sketchData: canvas.sketchData,
+      metadata:   S.originalMetadata,
     };
   }
 
   function applyInpaintState(state) {
     const s = state || {};
     applySettings(s);
+    S.bdRef = s.bdRef || null;
+    S.originalMetadata = s.metadata || null;
     restoreCanvas(s.imageData ?? null, s.maskData ?? null, s.sketchData ?? null);
   }
 
@@ -798,6 +803,7 @@ const Inpaint = (() => {
           blob = new Blob([injectJpegCom(jpgBuf, metaJson)], { type: 'image/jpeg' });
         }
 
+        if (Ext.saver?.active() && await Ext.saver.save(blob, 'inpaint')) return;
         const a = document.createElement('a');
         a.href     = URL.createObjectURL(blob);
         a.download = `inpaint-${Date.now()}.jpg`;
@@ -947,6 +953,7 @@ const Inpaint = (() => {
   // ── Image load ─────────────────────────────────────────────────────────────
   function loadFile(file) {
     S.originalMetadata = null;
+    S.bdRef = null;
     const reader = new FileReader();
     reader.onload = e => {
       const img = new Image();
@@ -956,7 +963,8 @@ const Inpaint = (() => {
     reader.readAsDataURL(file);
   }
 
-  function loadFromSrc(src) {
+  function loadFromSrc(src, bdRef = null) {
+    S.bdRef = bdRef;
     setStatus('Loading image…');
     S.originalMetadata = null;
     if (src.startsWith('data:')) {
@@ -1276,6 +1284,7 @@ const Inpaint = (() => {
 
     // Image de départ telle qu'au lancement (pour l'avant/après, même si une autre image est chargée entre-temps)
     const beforeSrc = S.imageData || S.image.src;
+      const bdRef = S.bdRef;
 
     try {
       // ── Export full-res image & mask ──────────────────────────────────────
@@ -1383,6 +1392,10 @@ const Inpaint = (() => {
         }
       }, 700);
 
+      if (Ext.beforeGeneration.length) {
+        setStatus('Préparation…');
+        await Ext.ready();
+      }
       setStatus('Sending to Forge…');
       setProgress(2);
 
@@ -1411,7 +1424,7 @@ const Inpaint = (() => {
       if (!images.length) throw new Error('No image in Forge response');
 
       // Forge handles compositing (inpaint_full_res) — just show the results
-      for (const b64 of images) await showResult(`data:image/png;base64,${b64}`, beforeSrc);
+      for (const b64 of images) await showResult(`data:image/png;base64,${b64}`, beforeSrc, bdRef);
 
     } catch (err) {
       if (pollId) { clearInterval(pollId); pollId = null; }
@@ -1455,7 +1468,7 @@ const Inpaint = (() => {
     if (el) el.remove();
   }
 
-  async function showResult(imgData, beforeSrc) {
+  async function showResult(imgData, beforeSrc, bdRef = null) {
     const src = imgData.startsWith('data:') ? imgData
               : imgData.startsWith('http')  ? imgData
               : `http://${API.host}/${imgData.replace(/^\//, '')}`;
@@ -1481,9 +1494,10 @@ const Inpaint = (() => {
       <button data-a="use" title="Continuer à retoucher ce résultat">↺ Retoucher</button>
       <button data-a="dl" title="Télécharger">⬇</button>`;
     actions.querySelector('[data-a="cmp"]')?.addEventListener('click', e => { e.stopPropagation(); openCompare(beforeSrc, src); });
-    actions.querySelector('[data-a="use"]').addEventListener('click', e => { e.stopPropagation(); loadFromSrc(src); });
-    actions.querySelector('[data-a="dl"]').addEventListener('click', e => {
+    actions.querySelector('[data-a="use"]').addEventListener('click', e => { e.stopPropagation(); loadFromSrc(src, bdRef); });
+    actions.querySelector('[data-a="dl"]').addEventListener('click', async e => {
       e.stopPropagation();
+      if (Ext.saver?.active() && await Ext.saver.save(src, 'inpaint', '', bdRef)) return;
       const a = document.createElement('a');
       a.href = src;
       a.download = `inpaint-${Date.now()}.png`;
@@ -1491,6 +1505,7 @@ const Inpaint = (() => {
     });
     card.append(img, actions);
     q('inp-results').prepend(card);
+    if (bdRef) document.dispatchEvent(new CustomEvent('inpaint:image', { detail: { src, bdRef } }));
     if (q('inp-dl-history')) q('inp-dl-history').style.display = '';
   }
 
@@ -1522,6 +1537,9 @@ const Inpaint = (() => {
   }
 
   // ── Public API ─────────────────────────────────────────────────────────────
-  return { init, onShow, loadFromSrc, refreshChoices };
+  // Origine et métadonnées de l'image affichée (pour une extension)
+  const promptSource = () => ({ bdRef: S.bdRef, metadata: S.originalMetadata });
+
+  return { init, onShow, loadFromSrc, promptSource, refreshChoices };
 
 })();

@@ -48,6 +48,7 @@ const API = {
 
   // Avant toute génération : libérer la mémoire vidéo des autres programmes
   async beforeGeneration() {
+    if (typeof Ext !== 'undefined') await Ext.ready();
     if (!this.neo && typeof NeoBackend !== 'undefined') await NeoBackend.releaseMemory();   // un seul moteur chargé à la fois
   },
 

@@ -2063,6 +2063,7 @@ async function copyImageToClipboard(url) {
 }
 
 async function downloadImage(url) {
+  if (Ext.saver?.active() && await Ext.saver.save(url, 'txt2img')) return;
   try {
     const res  = await fetch(url);
     const blob = await res.blob();
@@ -2421,6 +2422,7 @@ function switchTab(tab) {
   $('view-inpaint').classList.toggle('active', isInp);
   $('view-scheduler').classList.toggle('active', isSch);
   $('view-pnginfo').classList.toggle('active', isPng);
+  Object.keys(Ext.tabs).forEach(n => $('view-' + n)?.classList.toggle('active', tab === n));
   $('view-bd').classList.toggle('active', isBd);
   $('view-comic').classList.toggle('active', isComic);
   $('view-twitter').classList.toggle('active', isTw);
@@ -2429,6 +2431,7 @@ function switchTab(tab) {
   if (isFlux)  { Flux.init(); Flux.onShow(); }
   if (isInp)   { Inpaint.init(); Inpaint.onShow(); }
   if (isSch)   { Scheduler.init(); Scheduler.onShow(); setSchedulerMode(localStorage.getItem('sch-mode') || 'gen'); }
+  Object.entries(Ext.tabs).forEach(([n, t]) => { if (tab === n) t.onShow?.(); else t.onHide?.(); });
   if (isBd)    { BD.init(); BD.onShow(); }
   if (isComic) { Comic.init(); Comic.onShow(); }
   if (isTw)    { Watermark.init(); Twitter.init(); Twitter.onShow(); }   // le filigrane vit dans l'onglet Twitter
@@ -2438,6 +2441,7 @@ function switchTab(tab) {
 document.querySelectorAll('.tab').forEach(tab => {
   tab.addEventListener('click', () => switchTab(tab.dataset.tab));
 });
+if (Ext.firstTab) switchTab(Ext.firstTab);
 
 // ── Scheduler : deux modes dans le même onglet ────────────────────────────────
 // « Génération » = file SwarmUI (scheduler.js) ; « Inpaint par lot » = Forge (inpaintScheduler.js)

@@ -469,5 +469,8 @@ const CharSelector = (() => {
     watchPrompt();
   }
 
-  return { init, bindControls, toggle, toggleFor };
+  // Après un changement de la liste de personnages sur le disque
+  const reload = () => { thumbCache.clear(); return init(); };
+
+  return { init, reload, bindControls, toggle, toggleFor };
 })();

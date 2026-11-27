@@ -508,9 +508,24 @@ ipcMain.handle('llm:models', async (_, url) => {
   }
 });
 
+// ── Extensions locales facultatives ───────────────────────────────────────────
+// Le dossier private/ n'est ni dans le dépôt ni dans les constructions. Ses canaux sont tous préfixés « private: ».
+const PRIVATE_MAIN = path.join(__dirname, 'private', 'main.js');
+const HAS_PRIVATE = fsSync.existsSync(PRIVATE_MAIN);
+if (HAS_PRIVATE) require(PRIVATE_MAIN).register({
+  ipcMain: { handle: (channel, fn) => ipcMain.handle('private:' + channel, fn) },
+  send: (channel, value) => { const win = BrowserWindow.getAllWindows()[0]; if (win && !win.isDestroyed()) win.webContents.send('private:' + channel, value); },
+  app, dialog, shell, session, BrowserWindow,
+  getConfig: () => config, saveConfig: cfg => saveConfig(cfg),
+  getWindow: () => BrowserWindow.getAllWindows()[0],
+  getDataPath: () => DATA_PATH, bundledDataPath: BUNDLED_DATA_PATH,
+  setDataPath: p => { DATA_PATH = p || BUNDLED_DATA_PATH; if (p) config.dataPath = p; else delete config.dataPath; saveConfig(config); invalidateCache(); },
+});
+
 // ── IPC: auto-update ──────────────────────────────────────────────────────────
-autoUpdater.autoDownload = true;
-autoUpdater.autoInstallOnAppQuit = true;
+// Avec des extensions locales, pas de mise à jour automatique : elle remplacerait cette version.
+autoUpdater.autoDownload = !HAS_PRIVATE;
+autoUpdater.autoInstallOnAppQuit = !HAS_PRIVATE;
 
 ipcMain.handle('app:installUpdate', () => {
   quitting = true;   // l'installation de la mise à jour ne passe pas par la confirmation Cmd+Q
@@ -536,7 +551,7 @@ app.whenReady().then(() => {
   });
   registerNeoImages();
   createWindow();
-  if (app.isPackaged) autoUpdater.checkForUpdates().catch(() => {});
+  if (app.isPackaged && !HAS_PRIVATE) autoUpdater.checkForUpdates().catch(() => {});
 });
 
 app.on('child-process-gone', (_e, details) => {

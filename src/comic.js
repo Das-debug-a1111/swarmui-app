@@ -958,12 +958,14 @@ const Comic = (() => {
   }
 
   function exportPNG() {
-    withCleanRender(() => {
-      const a = document.createElement('a');
-      a.download = `comic-${Date.now()}.png`;
-      a.href = q('comic-canvas').toDataURL('image/png');
-      a.click();
-    });
+    let url = null;
+    withCleanRender(() => { url = q('comic-canvas').toDataURL('image/png'); });
+    const download = () => { const a = document.createElement('a'); a.download = `comic-${Date.now()}.png`; a.href = url; a.click(); };
+    if (Ext.saver?.active()) {   // enregistrement fourni par une extension
+      Ext.saver.save(url, 'comic').then(ok => { if (!ok) download(); });
+      return;
+    }
+    download();
   }
 
   async function copyImage() {
@@ -996,6 +998,13 @@ const Comic = (() => {
     btn.disabled = true;
     btn.textContent = '⏳ Compression…';
     try {
+      if (Ext.saver?.active()) {   // enregistrement fourni par une extension
+        let n = 0;
+        for (let i = 0; i < S.pages.length; i++) {
+          if (await Ext.saver.save(renderPageToDataURL(S.pages[i]), 'comic', `-page${String(i + 1).padStart(2, '0')}`)) n++;
+        }
+        if (n === S.pages.length) return;   // tout est enregistré : pas de ZIP
+      }
       const zip = new JSZip();
       S.pages.forEach((page, i) => {
         const base64 = renderPageToDataURL(page).split(',')[1];

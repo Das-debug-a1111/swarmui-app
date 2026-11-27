@@ -19,6 +19,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Forge Neo : garder une image générée et recevoir son adresse
   neoSaveImage:         (bytes)    => ipcRenderer.invoke('neo:saveImage', bytes),
 
+  // Extensions locales (dossier private/) : seuls les canaux préfixés « private: » sont accessibles
+  privateInvoke:        (channel, ...args) => ipcRenderer.invoke('private:' + channel, ...args),
+  privateOn:            (channel, cb) => ipcRenderer.on('private:' + channel, (_, value) => cb(value)),
+
   // Process launcher (SwarmUI, Forge, …) — key selects the config.json field
   pickLaunchScript:     (key, title, message) => ipcRenderer.invoke('launcher:pickScript', key, title, message),
   launchProcess:        (key, args)           => ipcRenderer.invoke('launcher:launch', key, args),
