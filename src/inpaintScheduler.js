@@ -727,6 +727,8 @@ const InpaintScheduler = (() => {
     };
     const scheduler = q('ips-scheduler').value;
     if (scheduler) payload.scheduler = scheduler;
+    // VAE et encodeur du modèle choisi (sinon Neo garde ceux de la génération précédente)
+    Object.assign(payload.override_settings, await NeoBackend.moduleSettings(payload.override_settings.sd_model_checkpoint));
 
     const pollId = setInterval(async () => {
       try {

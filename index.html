@@ -40,6 +40,10 @@
         <option value="minimal">Minimal</option>
         <option value="neon">Néon</option>
       </select>
+      <select id="sel-engine" class="theme-sel" title="Moteur utilisé par toute l'application">
+        <option value="swarm">SwarmUI</option>
+        <option value="neo">Neo</option>
+      </select>
       <div class="status-dot" id="status-dot"></div>
       <span id="status-text">Disconnected</span>
       <input type="text" id="host-input" value="localhost:7801" spellcheck="false">
@@ -80,11 +84,17 @@
       </div>
       <div class="sidebar-section-body" id="sec-model">
         <div class="family-chips" id="model-family-chips" style="display:none"></div>
+        <div class="field-label neo-only">Checkpoint</div>
         <select class="inp inp-lg" id="sel-model"><option value="">— Connect first —</option></select>
         <div class="field-inline">
           <span class="field-inline-lbl">VAE</span>
           <select class="inp" id="sel-vae"><option value="">Auto</option></select>
         </div>
+        <div class="field-inline" id="neo-family-row" style="display:none" title="Famille du modèle : elle décide du VAE et de l'encodeur de texte chargés par Neo">
+          <span class="field-inline-lbl">Famille Neo</span>
+          <select class="inp" id="sel-neo-family"></select>
+        </div>
+        <div class="field-hint neo-only" id="neo-modules-line"></div>
         <button class="btn-ghost" id="btn-free-forge-vram" title="Libère la VRAM retenue par Forge (utile si tu le fais tourner en parallèle de SwarmUI)">Libérer la VRAM de Forge</button>
       </div>
     </div>
@@ -141,6 +151,13 @@
             <select class="inp" id="sel-scheduler"><option value="">—</option></select>
           </div>
         </div>
+        <div class="field neo-only" id="neo-shift-field">
+          <div class="field-label">Shift <span id="lbl-neo-shift">3</span></div>
+          <div class="slider-row">
+            <input type="range" class="slider" id="sl-neo-shift" min="1" max="24" step="0.5" value="3">
+            <input type="text" class="inp" id="inp-neo-shift" value="3">
+          </div>
+        </div>
         <div class="field">
           <div class="field-label">Seed</div>
           <div class="seed-row">
@@ -181,6 +198,7 @@
       <div class="sidebar-section-body hidden" id="sec-refiner">
         <div class="module-off">Active l'interrupteur pour agrandir et affiner chaque image.</div>
         <div id="refiner-fields" style="display:none">
+          <div class="field-hint neo-only" id="neo-hr-res"></div>
           <div class="field">
             <div class="field-label">Modèle du refiner</div>
             <select class="inp" id="sel-refiner-model"><option value="">— Same as main —</option></select>
@@ -216,6 +234,14 @@
               <input type="range" class="slider" id="sl-refiner-cfg" min="1" max="20" step="0.5" value="7">
               <input type="text"  class="inp" id="inp-refiner-cfg" value="7">
             </div>
+          </div>
+          <div class="field neo-only" id="hr-sampler-field">
+            <div class="field-label">Hires Sampling Method</div>
+            <select class="inp" id="sel-hr-sampler"><option value="">Use same sampler</option></select>
+          </div>
+          <div class="field neo-only" id="hr-scheduler-field">
+            <div class="field-label">Hires Schedule Type</div>
+            <select class="inp" id="sel-hr-scheduler"><option value="">Use same scheduler</option></select>
           </div>
         </div>
       </div>
@@ -259,7 +285,7 @@
             </select>
             <div class="field-hint" id="cn-preproc-hint"></div>
           </div>
-          <div class="field" id="cn-union-field" style="display:none">
+          <div class="field swarm-only" id="cn-union-field" style="display:none">
             <div class="field-label">Type (modèle union)</div>
             <select class="inp" id="sel-cn-union"><option value="">Auto (d'après le préprocesseur)</option></select>
           </div>
@@ -298,6 +324,22 @@
       </div>
     </div>
 
+    <!-- Extensions de Forge Neo (voir src/neoext.js) -->
+    <div class="sidebar-section neo-only">
+      <div class="sidebar-section-hdr collapsed" data-section="neoext">
+        <span>Extensions Neo</span>
+        <div class="hdr-right">
+          <button id="btn-reload-neo-scripts" class="hdr-icon" title="Relire les scripts de Neo">↻</button>
+          <span class="arrow">›</span>
+        </div>
+      </div>
+      <div class="sidebar-section-body hidden" id="sec-neoext">
+        <button class="btn-add-lora" id="btn-neo-catalogue" type="button">🔍 Chercher des extensions</button>
+        <div class="field-hint" id="neo-scripts-hint"></div>
+        <div id="neo-scripts"></div>
+      </div>
+    </div>
+
     <!-- Reference images (SwarmUI "Prompt Images") -->
     <div class="sidebar-section">
       <div class="sidebar-section-hdr collapsed" data-section="refimg">
@@ -312,7 +354,7 @@
     </div>
 
     <!-- Extensions (auto-discovered SwarmUI/ComfyUI extension parameters) -->
-    <div class="sidebar-section">
+    <div class="sidebar-section swarm-only">
       <div class="sidebar-section-hdr collapsed" data-section="ext">
         <span>Extensions</span>
         <div class="hdr-right">
@@ -321,7 +363,7 @@
         </div>
       </div>
       <div class="sidebar-section-body hidden" id="sec-ext">
-        <div class="field-hint" id="ext-hint" style="margin:0 0 6px">Connecte-toi puis ↻ pour détecter les extensions installées sur ton SwarmUI.</div>
+        <div class="field-hint" id="ext-hint" style="margin:0 0 6px">Connecte-toi puis ↻ pour détecter les extensions installées (SwarmUI).</div>
         <div id="ext-groups"></div>
       </div>
     </div>
@@ -1006,7 +1048,7 @@
 
     <div class="sch-modebar">
       <div class="seg sch-modes" id="sch-mode">
-        <button data-mode="gen" class="active">Génération <small>SwarmUI</small></button>
+        <button data-mode="gen" class="active">Génération</button>
         <button data-mode="inpaint">Inpaint par lot <small>Forge</small></button>
       </div>
     </div>
@@ -2741,9 +2783,27 @@
   <div id="lightbox-counter"></div>
 </div>
 
+<div id="neo-cat" class="neo-cat" hidden>
+  <div class="neo-cat-box">
+    <div class="neo-cat-top">
+      <b>Extensions Forge Neo</b>
+      <input type="text" class="inp" id="neo-cat-search" placeholder="Chercher (ex. regional, detailer, upscale)…" spellcheck="false">
+      <select class="theme-sel" id="neo-cat-sort"><option value="stars">Les plus étoilées</option><option value="date">Les plus récentes</option><option value="name">Par nom</option></select>
+      <label class="check-row"><input type="checkbox" id="neo-cat-neo" checked> Compatibles Neo seulement</label>
+      <button type="button" class="btn-sm" id="neo-cat-close">✕</button>
+    </div>
+    <div class="field-hint">Catalogue communautaire que Neo charge par défaut. Une extension est du code d'un tiers qui s'exécutera sur ton PC : regarde son dépôt avant de l'installer.</div>
+    <div class="field-hint" id="neo-cat-count"></div>
+    <div class="neo-cat-list" id="neo-cat-list"></div>
+  </div>
+</div>
 <script src="src/jszip.min.js"></script>
 <script src="src/jspdf.umd.min.js"></script>
 <script src="src/api.js"></script>
+<script src="src/neoengine.js"></script>
+<script src="src/neobackend.js"></script>
+<script src="src/neoui.js"></script>
+<script src="src/neoext.js"></script>
 <script src="src/tagcomplete.js"></script>
 <script src="src/charselector.js"></script>
 <script src="src/instances.js"></script>

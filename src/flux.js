@@ -114,13 +114,13 @@ const Flux = (() => {
       if (samplerParam?.values) {
         const sel = q('flux-sel-sampler');
         const cur = sel.value || 'euler';
-        sel.innerHTML = samplerParam.values.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+        sel.innerHTML = samplerParam.values.map((v, i) => `<option value="${esc(v)}">${esc(samplerParam.neo_names?.[i] || v)}</option>`).join('');
         if ([...sel.options].some(o => o.value === cur)) sel.value = cur;
       }
       if (schedulerParam?.values) {
         const sel = q('flux-sel-scheduler');
         const cur = sel.value;
-        sel.innerHTML = schedulerParam.values.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join('');
+        sel.innerHTML = schedulerParam.values.map((v, i) => `<option value="${esc(v)}">${esc(schedulerParam.neo_names?.[i] || v)}</option>`).join('');
         // Peut arriver après loadModels() : garder le choix courant, sinon celui de la variante
         if (cur && [...sel.options].some(o => o.value === cur)) sel.value = cur;
         else setSchedulerIfAvailable(currentVariant()?.scheduler || 'simple');
@@ -213,7 +213,7 @@ const Flux = (() => {
   }
 
   async function reloadFluxLoras() {
-    if (!App.connected) { showErrorToast('Non connecté à SwarmUI'); return; }
+    if (!App.connected) { showErrorToast(`Non connecté à ${API.engineName}`); return; }
     const btn = q('flux-btn-reload-loras');
     btn.style.opacity = '0.4';
     btn.style.pointerEvents = 'none';
@@ -660,7 +660,7 @@ const Flux = (() => {
   }
 
   function startGeneration() {
-    if (!App.connected) { showErrorToast('Non connecté à SwarmUI'); return; }
+    if (!App.connected) { showErrorToast(`Non connecté à ${API.engineName}`); return; }
     if (S.running) { API.interrupt?.().catch(() => {}); finishGeneration(); return; }
     const payload = buildPayload();
     if (!payload) return;
@@ -684,10 +684,7 @@ const Flux = (() => {
       },
       onPreview() { /* pas d'aperçu live dans cette version simplifiée */ },
       onImage(imgData, metadata) {
-        let src;
-        if (typeof imgData === 'string' && imgData.startsWith('data:'))      src = imgData;
-        else if (typeof imgData === 'string' && imgData.startsWith('http')) src = imgData;
-        else src = `${API.origin}/${imgData}`;
+        const src = API.imageUrl(imgData);
         addToGallery({ url: src, seed: seedFromMetadata(metadata, payload.seed), prompt }, groupLabel);
       },
       onDone() {
@@ -841,5 +838,12 @@ const Flux = (() => {
     }
   }
 
-  return { init, onShow, loadFromSrc, capture, restore, addToQueue, editTask };
+  // Changement de moteur : liste des modèles à relire
+  function reset() {
+    S.models = [];
+    S.lastModel = null;
+    if (S.initialized && document.querySelector('.tab[data-tab="flux"].active')) setTimeout(onShow, 1500);
+  }
+
+  return { init, onShow, loadFromSrc, capture, restore, addToQueue, editTask, reset };
 })();

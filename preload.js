@@ -16,6 +16,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onUpdateError:        (cb)  => ipcRenderer.on('update-error', (_, m) => cb(m)),
   installUpdate:        ()    => ipcRenderer.invoke('app:installUpdate'),
 
+  // Forge Neo : garder une image générée et recevoir son adresse
+  neoSaveImage:         (bytes)    => ipcRenderer.invoke('neo:saveImage', bytes),
+
   // Process launcher (SwarmUI, Forge, …) — key selects the config.json field
   pickLaunchScript:     (key, title, message) => ipcRenderer.invoke('launcher:pickScript', key, title, message),
   launchProcess:        (key, args)           => ipcRenderer.invoke('launcher:launch', key, args),

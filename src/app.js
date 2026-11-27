@@ -31,6 +31,11 @@ function collectTxt2ImgState() {
     scheduler:      $('sel-scheduler')?.value        ?? '',
     count:          $('sel-count')?.value            ?? '1',
     // Refiner
+    hiresMode:      NeoBackend.active() ? 'neo' : 'swarm',
+    shift:          $('inp-neo-shift')?.value         ?? '3',
+    hrSampler:      $('sel-hr-sampler')?.value        ?? '',
+    hrScheduler:    $('sel-hr-scheduler')?.value      ?? '',
+    neoScripts:     NeoExt.snapshot(),
     refinerEnabled: $('chk-refiner')?.checked        ?? false,
     refinerModel:   $('sel-refiner-model')?.value    ?? '',
     refinerMethod:  $('sel-refiner-method')?.value   ?? '',
@@ -91,6 +96,11 @@ function applyTxt2ImgState(state) {
   setSl('sl-refiner-pct',   'inp-refiner-pct',   'lbl-refiner-pct',   g('refinerPct',  '0.6'), v => Math.round(v*100)+'%');
   setSl('sl-refiner-steps', 'inp-refiner-steps', 'lbl-refiner-steps', g('refinerSteps','10'));
   setSl('sl-refiner-cfg',   'inp-refiner-cfg',   'lbl-refiner-cfg',   g('refinerCfg',  '7'));
+  NeoExt.restore(g('neoScripts', null));
+  NeoUI.readFrom({
+    sigmashift: g('shift', '3'), hiressampler: g('hrSampler', ''), hiresscheduler: g('hrScheduler', ''),
+    hiresmode: g('hiresMode', 'swarm'), refinersteps: g('refinerSteps', '10'), refinercontrolpercentage: g('refinerPct', '0.6'),
+  });
 
   // ControlNet
   const cnEn = g('cnEnabled', false);
@@ -136,13 +146,17 @@ function setStatus(state, text) {
   const span = $('status-text');
   dot.className  = 'status-dot ' + (state || '');
   span.textContent = text;
+  // Connecté : le point vert suffit (place gagnée pour les onglets, à côté du choix du moteur)
+  span.hidden = state === 'connected';
+  dot.title = text;
 }
 
 // ── Connect ───────────────────────────────────────────────────────────────────
 async function connect() {
-  const host = $('host-input').value.trim();
+  const host = $('host-input').value.trim().replace(/^https?:\/\//, '').replace(/\/$/, '');
   if (!host) return;
-  API.host = host;
+  if (API.neo) setNeoUrl(`http://${host}`);
+  else { API.host = host; localStorage.setItem('swarm-host', host); }
 
   setStatus('connecting', 'Connecting…');
   $('btn-connect').disabled = true;
@@ -153,12 +167,62 @@ async function connect() {
     setStatus('connected', 'Connected');
     $('btn-generate').disabled = false;
     await loadAll();
+    updateNeoFamilyRow();
   } catch (e) {
     setStatus('error', 'Error: ' + e.message);
     console.error(e);
   } finally {
     $('btn-connect').disabled = false;
   }
+}
+
+// ── Moteur : SwarmUI ou Forge Neo (pour toute l'application) ────────────────
+// L'adresse de Neo est partagée avec l'onglet Inpaint et la file d'inpaint.
+function setNeoUrl(url) {
+  localStorage.setItem('forge-url', url);
+  ['inp-forge-url', 'ips-forge-url'].forEach(id => { if ($(id)) $(id).value = url; });
+}
+
+function syncEngineUI() {
+  const neo = API.neo;
+  $('sel-engine').value = neo ? 'neo' : 'swarm';
+  $('host-input').value = neo ? NeoBackend.url().replace(/^https?:\/\//, '') : API.host;
+  $('host-input').title = neo ? 'Adresse de Forge Neo (lancé avec --api)' : 'Adresse de SwarmUI';
+  if (window.electronAPI?.platform === 'win32') $('btn-launch-swarm').style.display = neo ? 'none' : '';
+  NeoUI.apply();
+  updateNeoFamilyRow();
+}
+
+async function switchEngine(engine) {
+  if (engine === NeoBackend.engine()) return;
+  if (App.running || (typeof Scheduler !== 'undefined' && Scheduler.isBusy?.())) { showErrorToast('Arrête la génération en cours avant de changer de moteur.'); return; }
+  NeoBackend.setEngine(engine);
+  API.session = null;
+  App.connected = false;
+  $('btn-generate').disabled = true;
+  syncEngineUI();
+  if (typeof Scheduler !== 'undefined') Scheduler.reset?.();
+  if (typeof Flux !== 'undefined') Flux.reset?.();
+  await connect();
+}
+
+// Neo ne dit pas la famille d'un modèle : elle est devinée, et corrigeable ici
+function updateNeoFamilyRow() {
+  const row = $('neo-family-row');
+  if (!row) return;
+  const model = $('sel-model').value;
+  row.style.display = API.neo && model ? '' : 'none';
+  if (!API.neo || !model) return;
+  const { family } = NeoBackend.familyInfo('model', model);
+  $('sel-neo-family').innerHTML = NeoEngine.FAMILIES.map(f =>
+    `<option value="${esc(f)}"${f === family ? ' selected' : ''}>${esc(NeoUI.presetName(f))}</option>`).join('') +
+    (family ? '' : '<option value="" selected>— à choisir —</option>');
+  NeoUI.family(family);
+  // « VAE / Text Encoder » : les fichiers que Neo chargera avec ce modèle
+  NeoBackend.moduleSettings(model).then(s => {
+    const files = (s.forge_additional_modules || []).map(f => f.replace(/\.safetensors$/i, ''));
+    $('neo-modules-line').textContent = files.length ? `VAE / Text Encoder : ${files.join(', ')}` : 'VAE / Text Encoder : ceux du checkpoint';
+  }).catch(e => { $('neo-modules-line').textContent = e.message; });
 }
 
 // ── Load all resources ────────────────────────────────────────────────────────
@@ -243,15 +307,15 @@ async function loadParams() {
     if (samplerParam?.values) {
       const sel = $('sel-sampler');
       const saved = localStorage.getItem('swarm-sampler') || samplerParam.default || '';
-      sel.innerHTML = samplerParam.values.map(v =>
-        `<option value="${esc(v)}"${v === saved ? ' selected' : ''}>${esc(v)}</option>`
+      sel.innerHTML = samplerParam.values.map((v, i) =>
+        `<option value="${esc(v)}"${v === saved ? ' selected' : ''}>${esc(samplerParam.neo_names?.[i] || v)}</option>`
       ).join('');
     }
     if (schedulerParam?.values) {
       const sel = $('sel-scheduler');
       const saved = localStorage.getItem('swarm-scheduler') || schedulerParam.default || '';
-      sel.innerHTML = schedulerParam.values.map(v =>
-        `<option value="${esc(v)}"${v === saved ? ' selected' : ''}>${esc(v)}</option>`
+      sel.innerHTML = schedulerParam.values.map((v, i) =>
+        `<option value="${esc(v)}"${v === saved ? ' selected' : ''}>${esc(schedulerParam.neo_names?.[i] || v)}</option>`
       ).join('');
     }
 
@@ -263,10 +327,14 @@ async function loadParams() {
     ];
     {
       const saved = localStorage.getItem('swarm-upscale-method') || 'model-remacri_original.pth';
-      sel.innerHTML = upscaleVals.map(v =>
-        `<option value="${esc(v)}"${v === saved ? ' selected' : ''}>${esc(friendlyUpscaleName(v))}</option>`
+      sel.innerHTML = upscaleVals.map((v, i) =>
+        `<option value="${esc(v)}"${v === saved ? ' selected' : ''}>${esc(upscaleMethodParam?.neo_names?.[i] || friendlyUpscaleName(v))}</option>`
       ).join('');
     }
+
+    if (API.neo) await NeoExt.load();
+    NeoUI.fillHiresLists(samplerParam, schedulerParam);
+    NeoUI.labels();
 
     // Union ControlNets (controlnet++ promax…): SwarmUI param "ControlNet Union Type" → "controlnetuniontype"
     const unionParam = params.find(p => p.id === 'controlnetuniontype');
@@ -488,7 +556,7 @@ function renderExtensionGroups(params, groups) {
 
   if (!relevantGroups.length) {
     box.innerHTML = '';
-    hint.textContent = params.length
+    hint.textContent = API.neo ? 'Moteur Neo : les réglages d\'extensions SwarmUI ne s\'appliquent pas.' : params.length
       ? 'Aucune extension avec des paramètres de génération détectée sur ce SwarmUI.'
       : 'Connecte-toi puis ↻ pour détecter les extensions installées sur ton SwarmUI.';
     return;
@@ -622,6 +690,7 @@ function renderExtensionGroups(params, groups) {
 
 // Merges every enabled extension param into the generation payload, keyed by its real SwarmUI param id
 function buildExtensionParamsPayload() {
+  if (API.neo) return {};   // réglages d'extensions SwarmUI : sans objet avec Forge Neo
   const out = {};
   const skipped = [];
   for (const [groupId, g] of Object.entries(App.extGroups)) {
@@ -646,7 +715,7 @@ function buildExtensionParamsPayload() {
 }
 
 $('btn-reload-ext').addEventListener('click', async () => {
-  if (!App.connected) { showErrorToast('Non connecté à SwarmUI'); return; }
+  if (!App.connected) { showErrorToast(`Non connecté à ${API.engineName}`); return; }
   const btn = $('btn-reload-ext');
   btn.style.opacity = '0.4';
   btn.style.pointerEvents = 'none';
@@ -1220,7 +1289,7 @@ function renderLoRA(item) {
 
 $('btn-add-lora').addEventListener('click', addLoRAItem);
 $('btn-reload-loras').addEventListener('click', async () => {
-  if (!App.connected) { showErrorToast('Non connecté à SwarmUI'); return; }
+  if (!App.connected) { showErrorToast(`Non connecté à ${API.engineName}`); return; }
   const btn = $('btn-reload-loras');
   btn.style.opacity = '0.4';
   btn.style.pointerEvents = 'none';
@@ -1238,7 +1307,7 @@ $('btn-reload-loras').addEventListener('click', async () => {
 });
 
 $('btn-reload-cn-preproc').addEventListener('click', async () => {
-  if (!App.connected) { showErrorToast('Non connecté à SwarmUI'); return; }
+  if (!App.connected) { showErrorToast(`Non connecté à ${API.engineName}`); return; }
   const btn = $('btn-reload-cn-preproc');
   btn.style.opacity = '0.4';
   btn.style.pointerEvents = 'none';
@@ -1330,6 +1399,8 @@ function buildTxt2ImgPayload() {
     localStorage.setItem('swarm-refiner-model',   $('sel-refiner-model').value);
     localStorage.setItem('swarm-upscale-method',  $('sel-refiner-method').value);
   }
+
+  NeoUI.addTo(payload);
 
   // ControlNet params
   if ($('chk-cn').checked && _cnImageData) {
@@ -1462,7 +1533,7 @@ function startGeneration() {
   const batchImages = [];
   const groupLabel  = new Date().toLocaleTimeString();
 
-  API.generate(payload, {
+  const callbacks = {
     onProgress(status, pct) {
       clearTimeout(_stallTimer);
       const label = typeof status === 'string' ? status : (status?.title || status?.stage || 'Generating…');
@@ -1488,16 +1559,7 @@ function startGeneration() {
       // Hide live preview when final image arrives
       const prev = $('gen-live-preview');
       if (prev) prev.style.display = 'none';
-      // SwarmUI sends a relative path like "Output/image.png", a full URL, or base64
-      let src;
-      if (typeof imgData === 'string' && imgData.startsWith('data:')) {
-        src = imgData;
-      } else if (typeof imgData === 'string' && imgData.startsWith('http')) {
-        src = imgData;
-      } else {
-        // relative path → prepend server origin
-        src = `${API.origin}/${imgData}`;
-      }
+      const src = API.imageUrl(imgData);
       // With a random seed (-1) the gallery's 🎲 "use this seed" used to copy -1: take the real one
       const img = { url: src, seed: seedFromMetadata(metadata, seed), prompt: payload.prompt };
       batchImages.push(img);
@@ -1518,9 +1580,12 @@ function startGeneration() {
       $('progress-wrap').classList.add('hidden');
       showErrorToast(err);
       // Session peut être périmée après un crash — tenter une reconnexion silencieuse
-      tryReconnect();
+      // (avec Neo, il n'y a pas de session : seulement si la connexion a été coupée)
+      if (!API.neo || /injoignable/.test(err)) tryReconnect();
     },
-  });
+  };
+
+  API.generate(payload, callbacks);
 }
 
 // SwarmUI sends each image's metadata as a JSON string: { sui_image_params: { seed, … }, … }
@@ -1550,7 +1615,7 @@ async function tryReconnect() {
     toast('✅ Session restaurée — tu peux générer à nouveau');
   } catch {
     App.connected = false;
-    setStatus('error', 'Session perdue — relance SwarmUI');
+    setStatus('error', `Session perdue — relance ${API.engineName}`);
   } finally {
     _reconnecting = false;
   }
@@ -1879,6 +1944,7 @@ function _sendToTxt2img(params) {
     $('chk-refiner').checked = false;
     $('refiner-fields').style.display = 'none';
   }
+  NeoUI.readFrom(p);
   // Switch to txt2img tab
   document.querySelector('.tab[data-tab="txt2img"]')?.click();
   toast('Envoyé vers txt2img !');
@@ -1903,7 +1969,7 @@ function _buildParamsCopy(params) {
     parts.push('--- Hires Fix ---');
     if (p.refinerupscalemethod)     parts.push(`HF Method: ${p.refinerupscalemethod}`);
     if (p.refinerupscale)           parts.push(`HF Scale: ${p.refinerupscale}`);
-    if (p.refinercontrolpercentage) parts.push(`HF Switch at: ${Math.round(p.refinercontrolpercentage * 100)}%`);
+    if (p.refinercontrolpercentage) parts.push(p.hiresmode === 'neo' ? `Denoising strength: ${p.refinercontrolpercentage}` : `HF Switch at: ${Math.round(p.refinercontrolpercentage * 100)}%`);
     if (p.refinersteps)             parts.push(`HF Steps: ${p.refinersteps}`);
     if (p.refinercfgscale)          parts.push(`HF CFG: ${p.refinercfgscale}`);
     if (p.refinermodel)             parts.push(`HF Model: ${p.refinermodel}`);
@@ -2197,6 +2263,7 @@ function applyPreset(preset) {
       }
     });
   }
+  NeoUI.readFrom(m);
 }
 
 function collectParamMap() {
@@ -2225,6 +2292,8 @@ function collectParamMap() {
     const rm = g('sel-refiner-model');
     if (rm) m.refinermodel     = rm;
   }
+
+  NeoUI.addTo(m);
 
   if (App.loraItems.length) {
     m.loras       = App.loraItems.filter(l => l.model).map(l => l.model).join(',');
@@ -2506,7 +2575,7 @@ async function sendToScheduler(seed) {
     if (raw) {
       try {
         const parsed = JSON.parse(raw);
-        return { source: 'SwarmUI', params: parsed.sui_image_params || parsed, extra: parsed.sui_extra_data || {}, raw };
+        return { source: parsed.sui_extra_data?.engine || 'SwarmUI', params: parsed.sui_image_params || parsed, extra: parsed.sui_extra_data || {}, raw };
       } catch {
         return { source: 'Forge / A1111', params: parseA1111(raw), extra: {}, raw };
       }
@@ -2549,14 +2618,22 @@ async function sendToScheduler(seed) {
     document.getElementById('pi-neg-card').hidden = !p.negativeprompt;
     document.getElementById('pi-neg').textContent = p.negativeprompt || '';
 
+    const neo = p.hiresmode === 'neo' || extra.engine === 'Forge Neo';
+    // Hires. fix d'une image Neo : ses propres valeurs, lues dans le texte que Neo a écrit
+    const neoText = String(extra.neo_infotext || '');
+    const neoValue = key => neoText.match(new RegExp(`${key}: ([^,\\n]+)`))?.[1] || '';
+    const hires = !p.refinerupscale ? '' : neo
+      ? [`Upscale by ${p.refinerupscale}`, neoValue('Hires upscaler') && `Upscaler ${neoValue('Hires upscaler')}`,
+         `Hires steps ${neoValue('Hires steps') || p.refinersteps}`, `Denoising strength ${neoValue('Denoising strength') || p.refinercontrolpercentage}`].filter(Boolean).join(' · ')
+      : `×${p.refinerupscale}${p.refinersteps ? ` · ${p.refinersteps} steps` : ''}`;
     const cells = [
       ['Modèle', p.model ? String(p.model).split('/').pop().replace(/\.(safetensors|gguf|ckpt)$/i, '') : ''],
       ['Taille', p.width && p.height ? `${p.width}×${p.height}` : ''],
-      ['Steps', p.steps], ['CFG', p.cfgscale],
-      ['Sampler', p.sampler], ['Scheduler', p.scheduler],
+      [neo ? 'Sampling Steps' : 'Steps', p.steps], [neo ? 'CFG Scale' : 'CFG', p.cfgscale],
+      [neo ? 'Sampling Method' : 'Sampler', (neo && neoValue('Sampler')) || p.sampler], [neo ? 'Schedule Type' : 'Scheduler', (neo && neoValue('Schedule type')) || p.scheduler],
       ['Seed', p.seed], ['VAE', p.vae],
       ['Denoising', p.denoising ?? p.initimagecreativity],
-      ['Refiner', p.refinerupscale ? `×${p.refinerupscale}${p.refinersteps ? ` · ${p.refinersteps} steps` : ''}` : ''],
+      [neo ? 'Hires. fix' : 'Refiner', hires],
     ].filter(([, v]) => v !== undefined && v !== null && v !== '');
     document.getElementById('pi-params-card').hidden = !cells.length;
     document.getElementById('pi-grid').innerHTML = cells.map(([k, v]) =>
@@ -2722,11 +2799,26 @@ window.addEventListener('DOMContentLoaded', () => {
   // Restore saved host if any
   const savedHost = localStorage.getItem('swarm-host');
   if (savedHost) $('host-input').value = savedHost;
+  API.host = $('host-input').value.trim() || API.host;
 
   // Launch-SwarmUI button only makes sense on the machine running SwarmUI itself
   if (window.electronAPI?.platform === 'win32') {
     $('btn-launch-swarm').style.display = '';
   }
+
+  // Moteur choisi la dernière fois
+  NeoExt.init();
+  NeoUI.init();
+  syncEngineUI();
+  $('sel-engine').addEventListener('change', async e => { await switchEngine(e.target.value); syncEngineUI(); });
+  $('sel-model').addEventListener('change', updateNeoFamilyRow);
+  $('sel-neo-family').addEventListener('change', async e => {
+    const model = $('sel-model').value;
+    NeoBackend.setModelFamily(model, e.target.value);
+    await loadModels();
+    selectModel(model);   // loadModels revient au dernier modèle utilisé : garder celui qu'on règle
+    updateNeoFamilyRow();
+  });
 
   // Init tag autocomplete
   TagComplete.init();

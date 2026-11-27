@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, dialog, net, session } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, net, session, protocol } = require('electron');
 const { autoUpdater } = require('electron-updater');
 const path    = require('path');
 const fs      = require('fs').promises;
@@ -38,6 +38,34 @@ let _tagAssist  = null;
 
 function invalidateCache() {
   _charList = _charThumbs = _tagAssist = null;
+}
+
+// ── Images de Forge Neo ──────────────────────────────────────────────────────
+// Neo renvoie l'image elle-même, sans adresse : on la garde ici et l'app la désigne par neoimg://img/<fichier>.
+protocol.registerSchemesAsPrivileged([{ scheme: 'neoimg', privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true } }]);
+const neoImageDir = () => path.join(app.getPath('userData'), 'neo-images');
+const NEO_NAME = /^[\w-]+\.png$/;
+
+ipcMain.handle('neo:saveImage', async (_, bytes) => {
+  try {
+    const buf = Buffer.from(bytes);
+    if (buf.length < 8 || buf.readUInt32BE(0) !== 0x89504E47) return { error: 'Image PNG invalide' };
+    const name = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}.png`;
+    await fs.mkdir(neoImageDir(), { recursive: true });
+    await fs.writeFile(path.join(neoImageDir(), name), buf);
+    return { url: `neoimg://img/${name}` };
+  } catch (e) { return { error: `Image non enregistrée : ${e.message}` }; }
+});
+
+function registerNeoImages() {
+  protocol.handle('neoimg', async request => {
+    const name = decodeURIComponent(new URL(request.url).pathname.slice(1));
+    const headers = { 'Access-Control-Allow-Origin': '*' };
+    if (!NEO_NAME.test(name)) return new Response('', { status: 404, headers });
+    try {
+      return new Response(await fs.readFile(path.join(neoImageDir(), name)), { headers: { ...headers, 'Content-Type': 'image/png' } });
+    } catch { return new Response('', { status: 404, headers }); }
+  });
 }
 
 // ── IPC: config ───────────────────────────────────────────────────────────────
@@ -506,6 +534,7 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(['local-fonts', 'clipboard-read', 'clipboard-sanitized-write'].includes(permission));
   });
+  registerNeoImages();
   createWindow();
   if (app.isPackaged) autoUpdater.checkForUpdates().catch(() => {});
 });

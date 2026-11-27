@@ -28,6 +28,25 @@ const XYZGrid = (() => {
     { id: 'refmodel', label: 'Hires : modèle', list: () => optValues('sel-refiner-model') },
   ];
   const axisDef = id => AXES.find(a => a.id === id) || AXES[0];
+  // Avec Neo, les axes portent ses noms
+  const NEO_AXES = {
+    steps: { label: 'Sampling Steps' }, cfg: { label: 'CFG Scale' }, sampler: { label: 'Sampling Method' }, scheduler: { label: 'Schedule Type' },
+    vae: { label: 'VAE / TE' }, refiner: { label: 'Hires : Denoising strength', hint: 'off = sans Hires. fix ; sinon le Denoising strength (0 à 1) — ex : off, 0.35, 0.5' },
+    refscale: { label: 'Hires : Upscale by' }, refmethod: { label: 'Hires : Upscaler' }, refmodel: { label: 'Hires Checkpoint' },
+  };
+  function nameAxes() {
+    const neo = typeof NeoBackend !== 'undefined' && NeoBackend.active();
+    for (const a of AXES) {
+      const o = NEO_AXES[a.id];
+      if (!o) continue;
+      a.swarm ??= { label: a.label, hint: a.hint };
+      a.label = neo ? o.label : a.swarm.label;
+      a.hint = neo ? (o.hint || a.swarm.hint) : a.swarm.hint;
+    }
+    for (let n = 1; n <= 3; n++) {
+      for (const opt of $(`xyz-type-${n}`)?.options || []) { const a = AXES.find(x => x.id === opt.value); if (a) opt.textContent = a.label; }
+    }
+  }
   const LORA_TAG = /<lora:[^>]*>/gi;
 
   // ── Lecture des axes ────────────────────────────────────────────────────────
@@ -67,7 +86,7 @@ const XYZGrid = (() => {
       pick.hidden = false;
       const names = def.list();
       const items = def.withNone ? [''].concat(names) : names;
-      if (!items.length) pick.innerHTML = '<div class="xyz-empty">Aucune valeur disponible (connecte-toi à SwarmUI)</div>';
+      if (!items.length) pick.innerHTML = '<div class="xyz-empty">Aucune valeur disponible (connecte-toi avec le bouton Connect)</div>';
       items.forEach(v => {
         const l = document.createElement('label');
         l.className = 'xyz-opt';
@@ -97,7 +116,10 @@ const XYZGrid = (() => {
     payload.refinerupscale = num('inp-refiner-scale', 1.5) || 1.5;
     payload.refinercontrolpercentage = num('inp-refiner-pct', 0.4);
     payload.refinerupscalemethod = $('sel-refiner-method')?.value || 'pixel-lanczos';
-    payload.refinersteps = parseInt($('inp-refiner-steps')?.value, 10) || 15;
+    if (NeoBackend.active()) {
+      payload.hiresmode = 'neo';
+      payload.refinersteps = parseInt($('inp-refiner-steps')?.value, 10) || 0;
+    } else payload.refinersteps = parseInt($('inp-refiner-steps')?.value, 10) || 15;
     payload.refinercfgscale = num('inp-refiner-cfg', payload.cfgscale || 7);
     const rm = $('sel-refiner-model')?.value;
     if (rm) payload.refinermodel = rm;
@@ -161,8 +183,7 @@ const XYZGrid = (() => {
 
   // ── Génération d'une image ──────────────────────────────────────────────────
   function toSrc(imgData) {
-    if (typeof imgData === 'string' && (imgData.startsWith('data:') || imgData.startsWith('http'))) return imgData;
-    return `${API.origin}/${imgData}`;
+    return API.imageUrl(imgData);
   }
 
   function generateOne(payload, onPct) {
@@ -362,6 +383,10 @@ const XYZGrid = (() => {
     });
     $('xyz-run').addEventListener('click', run);
     updateCount();
+    // Les noms des axes suivent le moteur (au changement et à l'ouverture de la grille)
+    nameAxes();
+    $('sel-engine')?.addEventListener('change', () => setTimeout(nameAxes, 0));
+    $('xyz-box').addEventListener('toggle', nameAxes);
   }
 
   return { init };

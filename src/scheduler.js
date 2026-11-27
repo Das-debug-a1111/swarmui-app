@@ -204,7 +204,7 @@ const Scheduler = (() => {
       requestNotifPermission();
     } catch(e) {
       S.connected = false;
-      setStatus('Connexion à SwarmUI impossible : ' + e.message);
+      setStatus(`Connexion à ${API.engineName} impossible : ` + e.message);
     } finally {
       S.connecting = false;
       updateButtons();
@@ -399,7 +399,7 @@ const Scheduler = (() => {
 
   // ── Presets SwarmUI → tâche manuelle ────────────────────────────────────────
   function openPresetPicker() {
-    if (!S.connected) { toast('Pas encore connecté à SwarmUI', 'error'); connect(); return; }
+    if (!S.connected) { toast(`Pas encore connecté à ${API.engineName}`, 'error'); connect(); return; }
     renderPresetList('');
     el('sws-preset-search').value = '';
     el('sws-preset-modal').classList.add('open');
@@ -520,6 +520,7 @@ const Scheduler = (() => {
       }
       const hf = task.hiresfix;
       if (hf && hf.enabled) {
+        if (hf.mode === 'neo') payload.hiresmode = 'neo';
         payload.refinermethod            = 'PostApply';
         payload.refinerupscale           = hf.scale  ?? 1.5;
         payload.refinercontrolpercentage = hf.pct    ?? 0.2;
@@ -539,7 +540,7 @@ const Scheduler = (() => {
     if (task.doneImages && +payload.seed >= 0) payload.seed = +payload.seed + task.doneImages;
     payload.images     = count;
     payload.session_id = API.session;
-    return payload;
+    return API.forEngine(payload);
   }
 
   // ── Génération (WebSocket) ──────────────────────────────────────────────────
@@ -547,13 +548,16 @@ const Scheduler = (() => {
   // sont comptées par onImage, le réessai ne génère que celles qui manquent).
   function generateWS(task, count, onImage) {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(`${API.wsOrigin}/API/GenerateText2ImageWS`);
+      const ws = API.openGenerationSocket();
       S.currentWS = ws;
       let gotDone = false, gotImage = false, settled = false, cut = false, received = 0;
       const fail = err => { if (!settled) { settled = true; reject(err); } };
       const ok   = () => { if (!settled) { settled = true; resolve(); } };
 
-      ws.onopen = () => ws.send(JSON.stringify(buildTaskPayload(task, count)));
+      ws.onopen = async () => {
+        await API.beforeGeneration();
+        if (ws.readyState === 1) ws.send(JSON.stringify(buildTaskPayload(task, count)));
+      };
 
       ws.onmessage = evt => {
         let msg; try { msg = JSON.parse(evt.data); } catch { return; }
@@ -572,9 +576,7 @@ const Scheduler = (() => {
           hideLivePreview();
           const imgObj  = typeof msg.image === 'object' ? msg.image : null;
           const rawPath = imgObj ? (imgObj.image || imgObj.url || '') : msg.image;
-          const src = rawPath.startsWith('http') || rawPath.startsWith('data:')
-            ? rawPath
-            : `${API.origin}/${rawPath.replace(/^\//, '')}`;
+          const src = rawPath ? API.imageUrl(rawPath) : '';
           if (src) {
             gotImage = true; received++; onImage(src);
             // Pause demandée : l'image en cours vient d'arriver, on interrompt le reste du lot côté SwarmUI
@@ -611,7 +613,7 @@ const Scheduler = (() => {
         if (!b || (b.status === 'running' && !b.any_loading)) return;
       } catch { /* réseau coupé : on réessaie */ }
       if (!waiting) { setTaskProgress(0, 'En attente de SwarmUI (démarrage ou chargement)…'); waiting = true; }
-      if (Date.now() - t0 > 10 * 60_000) throw new Error('SwarmUI ne répond plus depuis 10 minutes');
+      if (Date.now() - t0 > 10 * 60_000) throw new Error(`${API.engineName} ne répond plus depuis 10 minutes`);
       await sleep(3000);
     }
   }
@@ -632,8 +634,8 @@ const Scheduler = (() => {
 
   async function runQueueLoop() {
     if (!S.connected) await connect();
-    if (!S.connected) { toast('Pas connecté à SwarmUI', 'error'); return; }
-    if (!API.session) { try { await API.getSession(); } catch(e) { toast('Session SwarmUI : ' + e.message, 'error'); return; } }
+    if (!S.connected) { toast(`Pas connecté à ${API.engineName}`, 'error'); return; }
+    if (!API.session) { try { await API.getSession(); } catch(e) { toast(`Session ${API.engineName} : ` + e.message, 'error'); return; } }
     if (!pendingTasks().length) { toast('Aucune tâche en attente', 'error'); return; }
 
     clearSchedule();
@@ -744,7 +746,7 @@ const Scheduler = (() => {
     S.stopReq = true; S.paused = false;
     if (S.currentWS) { S.currentWS.close(); S.currentWS = null; }
     // Fermer la connexion ne suffit pas : sans interruption, SwarmUI continue de générer le lot
-    if (S.running) API.interrupt().catch(() => toast('SwarmUI n\'a pas reçu l\'arrêt', 'error'));
+    if (S.running) API.interrupt().catch(() => toast(`${API.engineName} n'a pas reçu l'arrêt`, 'error'));
     updateButtons();
   }
 
@@ -1163,7 +1165,7 @@ const Scheduler = (() => {
     el('q-var-model-hint').textContent = fam ? 'même famille que le modèle de la tâche' : '';
     el('q-var-models').innerHTML = list.length
       ? list.map(m => `<label class="check-row"><input type="checkbox" value="${esc(m.name)}"${m.name === cur ? ' disabled' : ''}> ${esc(shortModel(m.name))}${m.name === cur ? ' <small>(actuel)</small>' : ''}</label>`).join('')
-      : '<div class="field-hint">Connecte-toi à SwarmUI pour lister les modèles.</div>';
+      : '<div class="field-hint">Connecte-toi (bouton Connect en haut) pour lister les modèles.</div>';
     updateVarTotal();
     el('q-var-modal').classList.add('open');
     setTimeout(() => el('q-var-prompts').focus(), 50);
@@ -1545,6 +1547,20 @@ const Scheduler = (() => {
   }
 
   // ── Formulaire de tâche manuelle (ancien format) ────────────────────────────
+  // Hires. fix du formulaire : valeurs converties vers le moteur affiché
+  function showHires(from = 'swarm') {
+    const neo = NeoBackend.active();
+    const to = neo ? 'neo' : 'swarm';
+    el('sws-f-hf-steps').min = neo ? 0 : 1;
+    if ((from || 'swarm') !== to) {
+      const steps = parseInt(el('sws-f-hf-steps').value, 10) || 0, pct = parseFloat(el('sws-f-hf-pct').value) || 0.2;
+      const hf = neo ? NeoEngine.toNeoHires(steps || 1, pct) : NeoEngine.toSwarmHires(steps, pct, +el('sws-f-steps').value || 20);
+      el('sws-f-hf-steps').value = hf.steps;
+      el('sws-f-hf-pct').value = neo ? hf.denoise : hf.control;
+    }
+    NeoUI.labels();
+  }
+
   function openModal(id = null) {
     populateModels();
     populateCNModels();
@@ -1591,6 +1607,7 @@ const Scheduler = (() => {
       el('sws-f-hf-pct').value       = hf.pct    ?? 0.2;
       el('sws-f-hf-steps').value     = hf.steps  ?? 10;
       el('sws-f-hf-cfg').value       = hf.cfg    ?? 7;
+      showHires(hf.mode);
       el('sws-hf-body').classList.toggle('open', !!hf.enabled);
       el('sws-hf-arrow').textContent = hf.enabled ? '▼' : '▶';
       el('sws-f-w').value = t.width;
@@ -1625,6 +1642,7 @@ const Scheduler = (() => {
       el('sws-f-hf-pct').value       = 0.2;
       el('sws-f-hf-steps').value     = 10;
       el('sws-f-hf-cfg').value       = 7;
+      showHires('swarm');
       el('sws-hf-body').classList.remove('open');
       el('sws-hf-arrow').textContent = '▶';
       el('sws-f-w').value = 1024;
@@ -1652,7 +1670,7 @@ const Scheduler = (() => {
   }
 
   function quickPreview() {
-    if (!S.connected) { toast('Pas connecté à SwarmUI', 'error'); return; }
+    if (!S.connected) { toast(`Pas connecté à ${API.engineName}`, 'error'); return; }
     if (_qpWS) { _qpWS.close(); _qpWS = null; }
 
     const btn    = el('sws-qp-btn');
@@ -1702,8 +1720,12 @@ const Scheduler = (() => {
     status.textContent = 'Démarrage…';
     img.style.display = 'none';
 
-    _qpWS = new WebSocket(`${API.wsOrigin}/API/GenerateText2ImageWS`);
-    _qpWS.onopen = () => _qpWS.send(JSON.stringify(payload));
+    _qpWS = API.openGenerationSocket();
+    const qp = _qpWS;
+    qp.onopen = async () => {
+      await API.beforeGeneration();
+      if (qp.readyState === 1) qp.send(JSON.stringify(payload));
+    };
     _qpWS.onmessage = evt => {
       let msg; try { msg = JSON.parse(evt.data); } catch { return; }
       if (msg.error) { status.textContent = '❌ ' + msg.error; resetQpBtn(); return; }
@@ -1719,8 +1741,7 @@ const Scheduler = (() => {
       }
       if (msg.image) {
         const raw = typeof msg.image === 'object' ? (msg.image.image || msg.image.url || '') : msg.image;
-        const src = raw.startsWith('http') || raw.startsWith('data:')
-          ? raw : `${API.origin}/${raw.replace(/^\//, '')}`;
+        const src = API.imageUrl(raw);
         img.src = src;
         img.style.display = 'block';
         bar.style.width = '100%';
@@ -1777,7 +1798,8 @@ const Scheduler = (() => {
         method:  el('sws-f-hf-method').value,
         scale:   +el('sws-f-hf-scale').value || 1.5,
         pct:     +el('sws-f-hf-pct').value   || 0.2,
-        steps:   +el('sws-f-hf-steps').value || 10,
+        mode:    NeoBackend.active() ? 'neo' : 'swarm',
+        steps:   NeoBackend.active() ? numOr(el('sws-f-hf-steps').value, 0) : (+el('sws-f-hf-steps').value || 10),
         cfg:     numOr(el('sws-f-hf-cfg').value, 7),
       },
     };
@@ -2106,6 +2128,12 @@ const Scheduler = (() => {
     init,
     onShow,
     getLastPrompts,
+    // Changement de moteur : les listes seront rechargées à la prochaine ouverture
+    isBusy: () => !!S.running,
+    reset() {
+      S.connected = false;
+      if (document.querySelector('.tab[data-tab="scheduler"].active')) connect();
+    },
     addSnapshotTask,
     updateSnapshotTask,
     // Appelés depuis le HTML généré (listes des modales)

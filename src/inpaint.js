@@ -1317,6 +1317,8 @@ const Inpaint = (() => {
         save_images:  false,
       };
       if (scheduler) payload.scheduler = scheduler;
+      // VAE et encodeur du modèle choisi (sinon Neo garde ceux de la génération précédente)
+      Object.assign(payload.override_settings, await NeoBackend.moduleSettings(payload.override_settings.sd_model_checkpoint));
 
       if (softEnabled) {
         payload.alwayson_scripts = {

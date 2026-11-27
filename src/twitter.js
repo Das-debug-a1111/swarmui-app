@@ -409,7 +409,7 @@ const Twitter = (() => {
 
   function generate() {
     if (S.running) { API.interrupt?.().catch(() => {}); finish(); return; }
-    if (!App.connected) { showErrorToast('Non connecté à SwarmUI'); return; }
+    if (!App.connected) { showErrorToast(`Non connecté à ${API.engineName}`); return; }
     if (S.presetMissing) { showErrorToast(`Preset "${S.presetMissing}" introuvable — sauvegarde-le dans les Presets de Txt2Img ou choisis-en un autre`); return; }
     const payload = buildPayload();
     if (!payload) return;
@@ -427,8 +427,7 @@ const Twitter = (() => {
       },
       onPreview() {},
       onImage(imgData) {
-        const src = typeof imgData === 'string' && (imgData.startsWith('data:') || imgData.startsWith('http'))
-          ? imgData : `${API.origin}/${imgData}`;
+        const src = API.imageUrl(imgData);
         n++;
         Watermark.loadFromSrc(src, { name: `${baseName}_${++imgSeq}`, select: n === 1 });
       },

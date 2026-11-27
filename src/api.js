@@ -14,14 +14,41 @@ const API = {
   },
 
   // ── HTTP helper ──────────────────────────────────────────────────────────────
+  // Moteur choisi dans l'en-tête : avec Forge Neo, les mêmes appels sont servis par neobackend.js
+  get neo() { return typeof NeoBackend !== 'undefined' && NeoBackend.active(); },
+  get engineName() { return this.neo ? 'Forge Neo' : 'SwarmUI'; },
+
   async post(endpoint, body) {
+    if (this.neo) return NeoBackend.handle(endpoint, body);
     const r = await fetch(`${this.origin}${endpoint}`, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify(body),
     });
     if (!r.ok) throw new Error(`${endpoint} → HTTP ${r.status}`);
-    return r.json();
+    const data = await r.json();
+    if (endpoint === '/API/ListModels' && typeof NeoBackend !== 'undefined') NeoBackend.learn(body.subtype, data.files);
+    return data;
+  },
+
+  // Réglages « façon Neo » (Hires. fix) traduits quand c'est SwarmUI qui génère
+  forEngine(payload) {
+    return this.neo || typeof NeoEngine === 'undefined' ? payload : NeoEngine.toSwarmPayload(payload);
+  },
+
+  // Canal de génération : WebSocket de SwarmUI, ou son équivalent pour Neo
+  openGenerationSocket() {
+    return this.neo ? NeoBackend.socket() : new WebSocket(`${this.wsOrigin}/API/GenerateText2ImageWS`);
+  },
+
+  // Adresse affichable d'une image reçue (SwarmUI envoie un chemin relatif)
+  imageUrl(raw) {
+    return /^(data:|https?:|neoimg:|blob:)/.test(raw) ? raw : `${this.origin}/${String(raw).replace(/^\//, '')}`;
+  },
+
+  // Avant toute génération : libérer la mémoire vidéo des autres programmes
+  async beforeGeneration() {
+    if (!this.neo && typeof NeoBackend !== 'undefined') await NeoBackend.releaseMemory();   // un seul moteur chargé à la fois
   },
 
   // ── Models ───────────────────────────────────────────────────────────────────
@@ -112,6 +139,7 @@ const API = {
 
   // ── Libérer la VRAM/RAM des backends SwarmUI (utile avant de générer sur Forge) ─
   async freeBackendMemory(systemRam = false) {
+    if (this.neo) return NeoBackend.freeSwarm();
     if (!this.session) return null;
     return this.post('/API/FreeBackendMemory', { session_id: this.session, system_ram: systemRam, backend: 'all' });
   },
@@ -123,7 +151,7 @@ const API = {
   _sockets: new Set(),
 
   generate(payload, { onProgress, onPreview, onImage, onDone, onError } = {}) {
-    const ws = new WebSocket(`${this.wsOrigin}/API/GenerateText2ImageWS`);
+    const ws = this.openGenerationSocket();
     this._sockets.add(ws);
 
     // Exactly one terminal callback per generation (done could fire from msg.done AND onclose)
@@ -134,8 +162,9 @@ const API = {
       if (err !== undefined) onError?.(err); else onDone?.();
     };
 
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ session_id: this.session, ...payload }));
+    ws.onopen = async () => {
+      await this.beforeGeneration();
+      if (ws.readyState === 1) ws.send(JSON.stringify({ session_id: this.session, ...this.forEngine(payload) }));
     };
     let gotImage = false;
     ws.onmessage = e => {
